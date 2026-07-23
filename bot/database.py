@@ -68,7 +68,6 @@ def check_duplicate(db, username: str, phone_number: str, whatsapp_number: str, 
     coll = _submissions(db)
 
     queries = [
-        ("username", {"username": username}),
         ("phone_number", {"phone_number": phone_number}),
         ("whatsapp_number", {"whatsapp_number": whatsapp_number}),
     ]
