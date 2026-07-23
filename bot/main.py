@@ -130,10 +130,19 @@ def parse_submission(text: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def user_display(user) -> str:
-    """Return a mention or display name for a Telegram User object."""
+    """Return a display name (plain text) for logging and storage."""
     if user.username:
         return f"@{user.username}"
     return user.full_name or str(user.id)
+
+
+def user_html_mention(user) -> str:
+    """
+    Return an HTML mention that Telegram renders as a clickable tag.
+    Works for users with or without a public username.
+    """
+    name = user.full_name or user.username or str(user.id)
+    return f'<a href="tg://user?id={user.id}">{name}</a>'
 
 
 def format_duplicate_reply(
@@ -185,7 +194,8 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
     sender = message.from_user
-    sender_mention = user_display(sender)
+    sender_mention = user_html_mention(sender)   # clickable HTML tag in replies
+    sender_display = user_display(sender)         # plain text for logs/storage
 
     if result["found"]:
         original_doc = result["doc"]
