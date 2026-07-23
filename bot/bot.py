@@ -309,26 +309,9 @@ def run_flask():
 # Entry point
 # ---------------------------------------------------------------------------
 
-def main():
-    # Start keep-alive web server in a daemon thread
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    logger.info("Keep-alive server started on port %d", PORT)
-
-    if not BOT_TOKEN:
-        logger.error(
-            "BOT_TOKEN is missing. Set it via the environment variable and restart."
-        )
-        # Keep the Flask server alive even without a valid token so Render
-        # can bind to the port and UptimeRobot can reach /
-        flask_thread.join()
-        return
-
-    application = (
-        ApplicationBuilder()
-        .token(BOT_TOKEN)
-        .build()
-    )
+async def run_bot() -> None:
+    """Build and run the bot using the async context manager pattern."""
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
 
     # Admin commands (private chat only)
     application.add_handler(
@@ -347,7 +330,30 @@ def main():
     )
 
     logger.info("Bot is polling for updates…")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    async with application:
+        await application.start()
+        await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+        # Block forever until a signal arrives (SIGINT / SIGTERM)
+        await asyncio.Event().wait()
+        await application.updater.stop()
+        await application.stop()
+
+
+def main() -> None:
+    # Start keep-alive web server in a daemon thread so Render can bind the port
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    logger.info("Keep-alive server started on port %d", PORT)
+
+    if not BOT_TOKEN:
+        logger.error(
+            "BOT_TOKEN is missing. Set it via the environment variable and restart."
+        )
+        # Keep Flask alive so Render/UptimeRobot can still reach /
+        flask_thread.join()
+        return
+
+    asyncio.run(run_bot())
 
 
 if __name__ == "__main__":
