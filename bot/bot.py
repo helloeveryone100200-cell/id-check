@@ -167,19 +167,18 @@ def format_duplicate_reply(
 # ---------------------------------------------------------------------------
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/start — Welcome message."""
+    """/start — Welcome message (customisable via /setmsg welcome)."""
     user = update.effective_user
     name = user.full_name or user.username or "there"
+
+    db = db_module.get_db()
+    if db is None:
+        template = db_module.DEFAULT_START_MSG
+    else:
+        template = db_module.get_start_msg(db)
+
     await update.message.reply_text(
-        f"👋 Hello, <b>{name}</b>!\n\n"
-        "I'm a <b>duplicate submission checker bot</b>.\n\n"
-        "📋 <b>How it works:</b>\n"
-        "Send a message in the group with this format:\n\n"
-        "<code>Username - your_username\n"
-        "Phone number - 09xxxxxxxxx\n"
-        "Whatsapp number - 09xxxxxxxxx\n"
-        "ID - (optional)</code>\n\n"
-        "I will automatically check for duplicates and notify if any are found.",
+        template.replace("{name}", name),
         parse_mode="HTML",
     )
 
@@ -253,35 +252,56 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 async def cmd_setmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/setmsg — Admin command to set the duplicate warning message."""
+    """/setmsg — Admin command to set the duplicate or welcome message.
+
+    Usage:
+        /setmsg dup <message>      — set the duplicate warning message
+        /setmsg welcome <message>  — set the /start welcome message
+    """
     user = update.effective_user
     if not user or user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ You are not authorised to use this command.")
         return
 
-    if not context.args:
-        await update.message.reply_text(
-            "Usage: /setmsg &lt;your message&gt;\n\n"
-            "Supported placeholders:\n"
-            "  <code>{user_mention}</code> — the user who submitted the duplicate\n"
-            "  <code>{original_user}</code> — the original submitter\n"
-            "  <code>{matched_field}</code> — the duplicate field name\n\n"
-            "HTML formatting and Telegram Premium Animated Emoji tags are supported.",
-            parse_mode=ParseMode.HTML,
-        )
+    HELP = (
+        "Usage:\n"
+        "  /setmsg dup &lt;message&gt;     — duplicate warning\n"
+        "  /setmsg welcome &lt;message&gt; — /start welcome message\n\n"
+        "<b>Duplicate placeholders:</b>\n"
+        "  <code>{user_mention}</code> — user who submitted the duplicate\n"
+        "  <code>{original_user}</code> — original submitter\n"
+        "  <code>{matched_field}</code> — duplicate field name\n\n"
+        "<b>Welcome placeholder:</b>\n"
+        "  <code>{name}</code> — user's display name\n\n"
+        "HTML formatting and Telegram Premium Animated Emoji tags are supported."
+    )
+
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(HELP, parse_mode=ParseMode.HTML)
         return
 
-    new_message = " ".join(context.args)
+    msg_type = context.args[0].lower()
+    new_message = " ".join(context.args[1:])
+
+    if msg_type not in ("dup", "welcome"):
+        await update.message.reply_text(HELP, parse_mode=ParseMode.HTML)
+        return
 
     db = db_module.get_db()
     if db is None:
         await update.message.reply_text("❌ Database is unavailable. Please try again later.")
         return
 
-    if db_module.set_duplicate_msg(db, new_message):
+    if msg_type == "dup":
+        success = db_module.set_duplicate_msg(db, new_message)
+        label = "Duplicate warning message"
+    else:
+        success = db_module.set_start_msg(db, new_message)
+        label = "Welcome message"
+
+    if success:
         await update.message.reply_text(
-            "✅ Duplicate warning message updated successfully!\n\n"
-            "Preview:\n" + new_message,
+            f"✅ <b>{label}</b> updated!\n\nPreview:\n{new_message}",
             parse_mode=ParseMode.HTML,
         )
     else:
@@ -289,7 +309,7 @@ async def cmd_setmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 
 async def cmd_getmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/getmsg — Admin command to view the current duplicate warning message."""
+    """/getmsg — Admin command to view both custom messages."""
     user = update.effective_user
     if not user or user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ You are not authorised to use this command.")
@@ -300,9 +320,12 @@ async def cmd_getmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text("❌ Database is unavailable. Please try again later.")
         return
 
-    current_msg = db_module.get_duplicate_msg(db)
+    dup_msg = db_module.get_duplicate_msg(db)
+    start_msg = db_module.get_start_msg(db)
+
     await update.message.reply_text(
-        f"📋 <b>Current duplicate warning message:</b>\n\n{current_msg}",
+        f"📋 <b>Duplicate warning message:</b>\n{dup_msg}\n\n"
+        f"👋 <b>Welcome message (/start):</b>\n{start_msg}",
         parse_mode=ParseMode.HTML,
     )
 

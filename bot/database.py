@@ -128,26 +128,52 @@ DEFAULT_DUPLICATE_MSG = (
     "Duplicate field: <b>{matched_field}</b>"
 )
 
+DEFAULT_START_MSG = (
+    "👋 Hello, <b>{name}</b>!\n\n"
+    "I'm a <b>duplicate submission checker bot</b>.\n\n"
+    "📋 <b>How it works:</b>\n"
+    "Send a message in the group with this format:\n\n"
+    "<code>Username - your_username\n"
+    "Phone number - 09xxxxxxxxx\n"
+    "Whatsapp number - 09xxxxxxxxx\n"
+    "ID - (optional)</code>\n\n"
+    "I will automatically check for duplicates and notify if any are found."
+)
 
-def get_duplicate_msg(db) -> str:
-    """Return the custom duplicate warning message, or the default."""
+
+def _get_setting(db, key: str, default: str) -> str:
     coll = _settings(db)
-    doc = coll.find_one({"_id": "duplicate_msg"})
+    doc = coll.find_one({"_id": key})
     if doc and doc.get("value"):
         return doc["value"]
-    return DEFAULT_DUPLICATE_MSG
+    return default
 
 
-def set_duplicate_msg(db, message: str) -> bool:
-    """Upsert the custom duplicate warning message."""
+def _set_setting(db, key: str, message: str) -> bool:
     coll = _settings(db)
     try:
         coll.update_one(
-            {"_id": "duplicate_msg"},
+            {"_id": key},
             {"$set": {"value": message}},
             upsert=True,
         )
         return True
     except Exception as exc:
-        logger.error("Failed to set duplicate_msg: %s", exc)
+        logger.error("Failed to set %s: %s", key, exc)
         return False
+
+
+def get_duplicate_msg(db) -> str:
+    return _get_setting(db, "duplicate_msg", DEFAULT_DUPLICATE_MSG)
+
+
+def set_duplicate_msg(db, message: str) -> bool:
+    return _set_setting(db, "duplicate_msg", message)
+
+
+def get_start_msg(db) -> str:
+    return _get_setting(db, "start_msg", DEFAULT_START_MSG)
+
+
+def set_start_msg(db, message: str) -> bool:
+    return _set_setting(db, "start_msg", message)
