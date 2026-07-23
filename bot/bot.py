@@ -71,51 +71,50 @@ if not BOT_TOKEN:
 # ---------------------------------------------------------------------------
 
 RE_USERNAME = re.compile(
-    r"^username\s*-\s*(.+)$", re.IGNORECASE | re.MULTILINE
+    r".*username\s*-\s*(.+)$", re.IGNORECASE | re.MULTILINE
 )
 RE_PHONE = re.compile(
-    r"^phone\s*number\s*-\s*(.+)$", re.IGNORECASE | re.MULTILINE
+    r".*phone\s*number\s*-\s*(.+)$", re.IGNORECASE | re.MULTILINE
 )
 RE_WHATSAPP = re.compile(
-    r"^whatsapp\s*number\s*-\s*(.+)$", re.IGNORECASE | re.MULTILINE
+    r".*whatsapp\s*number\s*-\s*(.+)$", re.IGNORECASE | re.MULTILINE
 )
 RE_ID = re.compile(
-    r"^id\s*-\s*(.*)$", re.IGNORECASE | re.MULTILINE
+    r".*\bid\b\s*-\s*(.+)$", re.IGNORECASE | re.MULTILINE
 )
 
 
 def parse_submission(text: str) -> dict | None:
     """
     Extract submission fields from a message.
-    Returns a dict or None if the message does not match the required form.
+    Required : Phone number
+    Optional : Whatsapp number, ID, Username
+    Returns a dict or None if phone number is missing.
     """
     if not text:
         return None
 
-    m_username = RE_USERNAME.search(text)
     m_phone = RE_PHONE.search(text)
-    m_whatsapp = RE_WHATSAPP.search(text)
-
-    # All three required fields must be present and non-empty
-    if not (m_username and m_phone and m_whatsapp):
+    if not m_phone:
         return None
 
-    username = m_username.group(1).strip()
     phone = m_phone.group(1).strip()
-    whatsapp = m_whatsapp.group(1).strip()
-
-    if not username or not phone or not whatsapp:
+    if not phone:
         return None
 
-    # Optional ID field — silently ignore if present but empty
+    # Optional fields
+    m_username = RE_USERNAME.search(text)
+    username = m_username.group(1).strip() if m_username else ""
+
+    m_whatsapp = RE_WHATSAPP.search(text)
+    whatsapp = m_whatsapp.group(1).strip() if m_whatsapp else None
+
+    # ID — silently ignore if present but empty
     id_number: str | None = None
     m_id = RE_ID.search(text)
     if m_id:
         id_value = m_id.group(1).strip()
-        if not id_value:
-            # ID tag exists but value is blank — ignore silently
-            pass
-        else:
+        if id_value:
             id_number = id_value
 
     return {
@@ -205,7 +204,6 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     # Duplicate check
     result = db_module.check_duplicate(
         db,
-        username=parsed["username"],
         phone_number=parsed["phone_number"],
         whatsapp_number=parsed["whatsapp_number"],
         id_number=parsed["id_number"],

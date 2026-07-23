@@ -56,9 +56,12 @@ def _submissions(db):
     return db["submissions"]
 
 
-def check_duplicate(db, username: str, phone_number: str, whatsapp_number: str, id_number: str | None = None):
+def check_duplicate(db, phone_number: str, whatsapp_number: str | None = None, id_number: str | None = None):
     """
     Check whether any field already exists in the submissions collection.
+
+    Required : phone_number
+    Optional : whatsapp_number, id_number (only checked when provided)
 
     Returns a dict with keys:
       - 'found'   (bool)      — whether a duplicate was detected
@@ -67,10 +70,9 @@ def check_duplicate(db, username: str, phone_number: str, whatsapp_number: str, 
     """
     coll = _submissions(db)
 
-    queries = [
-        ("phone_number", {"phone_number": phone_number}),
-        ("whatsapp_number", {"whatsapp_number": whatsapp_number}),
-    ]
+    queries = [("phone_number", {"phone_number": phone_number})]
+    if whatsapp_number:
+        queries.append(("whatsapp_number", {"whatsapp_number": whatsapp_number}))
     if id_number:
         queries.append(("id_number", {"id_number": id_number}))
 
@@ -89,7 +91,7 @@ def save_submission(
     telegram_username: str,
     username: str,
     phone_number: str,
-    whatsapp_number: str,
+    whatsapp_number: str | None = None,
     id_number: str | None = None,
 ) -> bool:
     """Insert a new submission. Returns True on success."""
@@ -99,9 +101,10 @@ def save_submission(
         "telegram_username": telegram_username,
         "username": username.lower(),
         "phone_number": phone_number,
-        "whatsapp_number": whatsapp_number,
         "created_at": datetime.now(timezone.utc),
     }
+    if whatsapp_number:
+        doc["whatsapp_number"] = whatsapp_number
     if id_number:
         doc["id_number"] = id_number.lower()
 
