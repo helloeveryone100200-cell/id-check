@@ -11,6 +11,7 @@ Environment variables:
     PORT        — Port for the keep-alive web server (default: 8080)
 """
 
+import asyncio
 import logging
 import os
 import re
