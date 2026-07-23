@@ -166,6 +166,24 @@ def format_duplicate_reply(
 # Handlers
 # ---------------------------------------------------------------------------
 
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/start — Welcome message."""
+    user = update.effective_user
+    name = user.full_name or user.username or "there"
+    await update.message.reply_text(
+        f"👋 Hello, <b>{name}</b>!\n\n"
+        "I'm a <b>duplicate submission checker bot</b>.\n\n"
+        "📋 <b>How it works:</b>\n"
+        "Send a message in the group with this format:\n\n"
+        "<code>Username - your_username\n"
+        "Phone number - 09xxxxxxxxx\n"
+        "Whatsapp number - 09xxxxxxxxx\n"
+        "ID - (optional)</code>\n\n"
+        "I will automatically check for duplicates and notify if any are found.",
+        parse_mode="HTML",
+    )
+
+
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle text messages and photo captions in groups/supergroups."""
     message = update.message
@@ -313,6 +331,9 @@ def run_flask():
 async def run_bot() -> None:
     """Build and run the bot using the async context manager pattern."""
     application = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    # /start — works everywhere
+    application.add_handler(CommandHandler("start", cmd_start))
 
     # Admin commands (private chat only)
     application.add_handler(
