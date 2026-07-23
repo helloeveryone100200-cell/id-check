@@ -1,0 +1,95 @@
+Build a Python-based Telegram Bot using the `python-telegram-bot` (v20+) library and `pymongo` for MongoDB database integration. The bot needs to be ready for deployment on Render.com with continuous uptime.
+
+---
+
+### 1. Environment Variables Configuration
+The bot must read the following environment variables:
+- `BOT_TOKEN`: Telegram Bot API Token.
+- `ADMIN_IDS`: Comma-separated Telegram User IDs of admins/owner (e.g., "123456,789012").
+- `MONGO_URI`: MongoDB Connection String.
+
+---
+
+### 2. Database Schema (MongoDB)
+Create a MongoDB collection named `submissions` to store each valid user submission:
+- `telegram_id` (int/str)
+- `telegram_username` (str, e.g., @username or First Name)
+- `username` (str) -> lowercased
+- `phone_number` (str)
+- `whatsapp_number` (str)
+- `id_number` (str, optional) -> lowercased
+- `created_at` (datetime)
+
+Create a separate collection named `bot_settings` to store custom notification messages set by the bot owner:
+- `duplicate_msg`: Custom alert message for duplicate entries. Supports Telegram HTML formatting and custom premium animated emoji tags.
+
+---
+
+### 3. Text & Image Handling (Group Messages)
+The bot must listen to all incoming text messages and photo captions in Telegram groups.
+
+#### Validation & Data Extraction Rules:
+- Extract data using regex (case-insensitive, trim whitespace):
+  1. `Username - <value>` (must be a valid format)
+  2. `Phone number - <value>`
+  3. `Whatsapp number - <value>`
+  4. `ID - <value>` OR `id - <value>` (Optional field)
+
+- **Silence Rules (Ignore silently if):**
+  - The message does NOT strictly follow the form format (missing Username, Phone number, or Whatsapp number).
+  - An `ID` or `id -` field exists, but its value is empty/blank.
+
+---
+
+### 4. Duplicate Check Logic
+If the message passes validation, check MongoDB for duplicates:
+1. Check if `username`, `phone_number`, OR `whatsapp_number` already exists in the database.
+2. If `ID` / `id` is provided, also check if `id_number` already exists.
+
+- **If Duplicate Found:**
+  - Do NOT save the new data.
+  - Send a warning reply to the group tagging/mentioning the current user, specifying that this data was previously submitted by `<Original User's @username or Name>`.
+  - Use the custom response message defined by the bot owner.
+  - Enable `parse_mode="HTML"` so custom premium emojis work properly.
+
+- **If No Duplicate:**
+  - Save the submission data along with the submitter's Telegram info to MongoDB.
+
+---
+
+### 5. Bot Owner Private Message (PM) Controls
+Only users whose Telegram IDs are listed in `ADMIN_IDS` can configure the bot via Private Chat.
+
+- **/setmsg <your_message_here>**:
+  - Allows the owner to set a custom reply message for duplicate warnings.
+  - Support placeholders like `{original_user}` (the user who submitted it first) and `{matched_field}` (what was duplicate).
+  - Must preserve HTML tags and Telegram Premium Animated Emoji syntax (e.g., `<tg-emoji emoji-id="5368324170671202286">⚠️</tg-emoji>`).
+
+- **/getmsg**:
+  - Displays the current active response message.
+
+---
+
+### 6. Keep-Alive Web Server (For Render & UptimeRobot)
+- Create a lightweight `Flask` or `aiohttp` web server running on port `8080` (or `PORT` environment variable).
+- Define a GET route `/` returning `"Bot is alive!"` with HTTP status 200.
+- Run this web server on a separate thread alongside the Telegram Bot polling mechanism so Render can bind to the port successfully.
+
+---
+
+### 7. File Structure & Dependencies
+Generate a clean code structure:
+- `main.py` (Bot logic and Flask server)
+- `database.py` (MongoDB helper functions)
+- `requirements.txt` (including `python-telegram-bot`, `pymongo`, `dnspython`, `flask`)
+
+Do not ask for actual secret values (BOT_TOKEN, ADMIN_IDS, MONGO_URI) directly. 
+
+Please write the code so that it reads these credentials dynamically from environment variables using `os.getenv()` or `os.environ` when deployed.
+
+For local testing/development within Replit:
+1. Use safe fallback/mock values or load them gracefully using `python-dotenv` if a `.env` file exists.
+2. Ensure the code handles missing environment variables gracefully (e.g., log a warning instead of crashing immediately on startup if MONGO_URI or BOT_TOKEN is empty).
+3. Proceed with generating the complete code structure (`main.py`, `database.py`, `requirements.txt`). 
+
+I will provide the actual real values later in the Render.com Environment Variables dashboard.
