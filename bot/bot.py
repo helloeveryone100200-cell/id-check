@@ -27,7 +27,7 @@ try:
 except ImportError:
     pass
 
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder,
@@ -166,19 +166,38 @@ def format_duplicate_reply(
 # ---------------------------------------------------------------------------
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """/start — Welcome message (customisable via /setmsg welcome)."""
+    """/start — Welcome message with inline buttons."""
     user = update.effective_user
     name = user.full_name or user.username or "there"
 
     db = db_module.get_db()
-    if db is None:
-        template = db_module.DEFAULT_START_MSG
-    else:
-        template = db_module.get_start_msg(db)
+    template = db_module.get_start_msg(db) if db else db_module.DEFAULT_START_MSG
+
+    bot_username = context.bot.username or "this_bot"
+
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "➕ Add to Group",
+                url=f"https://t.me/{bot_username}?startgroup=true",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "🔗 Share Bot",
+                url=f"https://t.me/share/url?url=https://t.me/{bot_username}",
+            ),
+            InlineKeyboardButton(
+                "👤 Author",
+                url="https://t.me/yasha_sangi",
+            ),
+        ],
+    ])
 
     await update.message.reply_text(
         template.replace("{name}", name),
         parse_mode="HTML",
+        reply_markup=keyboard,
     )
 
 
