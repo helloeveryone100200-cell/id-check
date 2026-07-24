@@ -274,17 +274,23 @@ async def cmd_setmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         "HTML formatting and Telegram Premium Animated Emoji tags are supported."
     )
 
-    # Use raw message text to preserve newlines and formatting.
-    # update.message.text = "/setmsg dup <actual message with newlines>"
-    raw = update.message.text or ""
-    parts = raw.split(None, 2)   # ["/setmsg", "dup|welcome", "<rest>"]
+    # Use plain text only to detect command type.
+    plain = update.message.text or ""
+    parts = plain.split(None, 2)   # ["/setmsg", "dup|welcome", "<rest>"]
 
     if len(parts) < 3:
         await update.message.reply_text(HELP, parse_mode=ParseMode.HTML)
         return
 
     msg_type = parts[1].lower()
-    new_message = parts[2].strip()
+
+    # Use text_html so animated/custom emojis are preserved as
+    # <tg-emoji emoji-id="...">...</tg-emoji> tags automatically.
+    full_html = update.message.text_html or plain
+    # Strip the "/setmsg TYPE " prefix from the HTML version.
+    # The command and type words contain no HTML entities, so a simple
+    # regex strip is safe.
+    new_message = re.sub(r"^/\S+\s+\S+\s*", "", full_html, count=1).strip()
 
     if msg_type not in ("dup", "welcome"):
         await update.message.reply_text(HELP, parse_mode=ParseMode.HTML)
