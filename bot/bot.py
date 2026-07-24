@@ -167,38 +167,44 @@ def format_duplicate_reply(
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/start — Welcome message with inline buttons."""
-    user = update.effective_user
-    name = user.full_name or user.username or "there"
+    try:
+        user = update.effective_user
+        name = user.full_name or user.username or "there"
 
-    db = db_module.get_db()
-    template = db_module.get_start_msg(db) if db else db_module.DEFAULT_START_MSG
+        db = db_module.get_db()
+        template = db_module.get_start_msg(db) if db else db_module.DEFAULT_START_MSG
 
-    bot_username = context.bot.username or "this_bot"
+        # Safely fetch bot username (may require an API call on first use)
+        bot_info = await context.bot.get_me()
+        bot_username = bot_info.username or "this_bot"
 
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(
-                "➕ Add to Group",
-                url=f"https://t.me/{bot_username}?startgroup=true",
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                "🔗 Share Bot",
-                url=f"https://t.me/share/url?url=https://t.me/{bot_username}",
-            ),
-            InlineKeyboardButton(
-                "👤 Author",
-                url="https://t.me/yasha_sangi",
-            ),
-        ],
-    ])
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton(
+                    "➕ Add to Group",
+                    url=f"https://t.me/{bot_username}?startgroup=true",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "🔗 Share Bot",
+                    url=f"https://t.me/share/url?url=https://t.me/{bot_username}",
+                ),
+                InlineKeyboardButton(
+                    "👤 Author",
+                    url="https://t.me/yasha_sangi",
+                ),
+            ],
+        ])
 
-    await update.message.reply_text(
-        template.replace("{name}", name),
-        parse_mode="HTML",
-        reply_markup=keyboard,
-    )
+        await update.message.reply_text(
+            template.replace("{name}", name),
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
+    except Exception as exc:
+        logger.error("cmd_start failed: %s", exc, exc_info=True)
+        await update.message.reply_text("⚠️ Something went wrong. Please try again.")
 
 
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
