@@ -317,6 +317,50 @@ async def cmd_setmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text("❌ Failed to update the message. Check the logs.")
 
 
+async def cmd_resetmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/resetmsg — Reset dup or welcome message back to default.
+
+    Usage:
+        /resetmsg dup     — reset duplicate warning to default
+        /resetmsg welcome — reset /start welcome to default
+    """
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ You are not authorised to use this command.")
+        return
+
+    HELP = (
+        "Usage:\n"
+        "  /resetmsg dup     — reset duplicate warning to default\n"
+        "  /resetmsg welcome — reset /start welcome to default"
+    )
+
+    if not context.args or context.args[0].lower() not in ("dup", "welcome"):
+        await update.message.reply_text(HELP)
+        return
+
+    msg_type = context.args[0].lower()
+    key = "duplicate_msg" if msg_type == "dup" else "start_msg"
+    label = "Duplicate warning message" if msg_type == "dup" else "Welcome message"
+
+    db = db_module.get_db()
+    if db is None:
+        await update.message.reply_text("❌ Database is unavailable. Please try again later.")
+        return
+
+    if db_module.reset_setting(db, key):
+        default = (
+            db_module.DEFAULT_DUPLICATE_MSG if msg_type == "dup"
+            else db_module.DEFAULT_START_MSG
+        )
+        await update.message.reply_text(
+            f"🔄 <b>{label}</b> has been reset to default!\n\nDefault:\n{default}",
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        await update.message.reply_text("❌ Failed to reset. Check the logs.")
+
+
 async def cmd_getmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/getmsg — Admin command to view both custom messages."""
     user = update.effective_user
@@ -373,6 +417,9 @@ async def run_bot() -> None:
     )
     application.add_handler(
         CommandHandler("getmsg", cmd_getmsg, filters=filters.ChatType.PRIVATE)
+    )
+    application.add_handler(
+        CommandHandler("resetmsg", cmd_resetmsg, filters=filters.ChatType.PRIVATE)
     )
 
     # Group message listener (text + photo captions)

@@ -205,3 +205,14 @@ def get_start_msg(db) -> str:
 
 def set_start_msg(db, message: str) -> bool:
     return _set_setting(db, "start_msg", message)
+
+
+def reset_setting(db, key: str) -> bool:
+    """Delete a custom setting so the default is used again."""
+    coll = _settings(db)
+    try:
+        coll.delete_one({"_id": key})
+        return True
+    except Exception as exc:
+        logger.error("Failed to reset %s: %s", key, exc)
+        return False
