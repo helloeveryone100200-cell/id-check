@@ -4,12 +4,21 @@ database.py — MongoDB helper functions for the Telegram submission bot.
 
 import logging
 import os
+import re as _re
 from datetime import datetime, timezone
 
-from pymongo import MongoClient
+from pymongo import MongoClient, ASCENDING
 from pymongo.errors import ConnectionFailure, OperationFailure
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def normalize_phone(number: str) -> str:
+    """Strip spaces, dashes, dots so 09-123, 09 123, 09.123 all become 09123."""
+    return _re.sub(r"[\s\-\.\(\)]", "", number)
 
 # ---------------------------------------------------------------------------
 # Connection
@@ -39,6 +48,7 @@ def get_db():
         _client.admin.command("ping")
         db_name = os.getenv("MONGO_DB_NAME", "telegram_bot")
         _db = _client[db_name]
+        _ensure_indexes(_db)
         logger.info("Connected to MongoDB (db: %s)", db_name)
     except (ConnectionFailure, OperationFailure) as exc:
         logger.error("Failed to connect to MongoDB: %s", exc)
@@ -51,6 +61,16 @@ def get_db():
 # ---------------------------------------------------------------------------
 # submissions collection
 # ---------------------------------------------------------------------------
+
+def _ensure_indexes(db) -> None:
+    """Create indexes on frequently queried fields (idempotent)."""
+    coll = db["submissions"]
+    coll.create_index([("phone_number", ASCENDING)], name="idx_phone")
+    coll.create_index([("whatsapp_number", ASCENDING)], sparse=True, name="idx_whatsapp")
+    coll.create_index([("id_number", ASCENDING)], sparse=True, name="idx_id")
+    coll.create_index([("created_at", ASCENDING)], name="idx_created_at")
+    logger.info("MongoDB indexes ensured")
+
 
 def _submissions(db):
     return db["submissions"]
@@ -69,6 +89,12 @@ def check_duplicate(db, phone_number: str, whatsapp_number: str | None = None, i
       - 'field'   (str|None)  — which field triggered the duplicate
     """
     coll = _submissions(db)
+
+    phone_number = normalize_phone(phone_number)
+    if whatsapp_number:
+        whatsapp_number = normalize_phone(whatsapp_number)
+    if id_number:
+        id_number = id_number.strip().lower()
 
     queries = [("phone_number", {"phone_number": phone_number})]
     if whatsapp_number:
@@ -99,14 +125,14 @@ def save_submission(
     doc = {
         "telegram_id": telegram_id,
         "telegram_username": telegram_username,
-        "username": username.lower(),
-        "phone_number": phone_number,
+        "username": username.strip().lower(),
+        "phone_number": normalize_phone(phone_number),
         "created_at": datetime.now(timezone.utc),
     }
     if whatsapp_number:
-        doc["whatsapp_number"] = whatsapp_number
+        doc["whatsapp_number"] = normalize_phone(whatsapp_number)
     if id_number:
-        doc["id_number"] = id_number.lower()
+        doc["id_number"] = id_number.strip().lower()
 
     try:
         coll.insert_one(doc)
