@@ -68,6 +68,7 @@ def _ensure_indexes(db) -> None:
     coll.create_index([("phone_number", ASCENDING)], name="idx_phone")
     coll.create_index([("whatsapp_number", ASCENDING)], sparse=True, name="idx_whatsapp")
     coll.create_index([("id_number", ASCENDING)], sparse=True, name="idx_id")
+    coll.create_index([("username", ASCENDING)], sparse=True, name="idx_username")
     coll.create_index([("created_at", ASCENDING)], name="idx_created_at")
     logger.info("MongoDB indexes ensured")
 
@@ -76,12 +77,19 @@ def _submissions(db):
     return db["submissions"]
 
 
-def check_duplicate(db, phone_number: str, whatsapp_number: str | None = None, id_number: str | None = None):
+def check_duplicate(
+    db,
+    phone_number: str,
+    whatsapp_number: str | None = None,
+    id_number: str | None = None,
+    username: str | None = None,
+):
     """
     Check whether any field already exists in the submissions collection.
 
     Required : phone_number
-    Optional : whatsapp_number, id_number (only checked when provided)
+    Optional : whatsapp_number, id_number, username (only checked when provided
+               and non-empty)
 
     Returns a dict with keys:
       - 'found'   (bool)       — whether any duplicate was detected
@@ -94,12 +102,15 @@ def check_duplicate(db, phone_number: str, whatsapp_number: str | None = None, i
     norm_phone = normalize_phone(phone_number)
     norm_whatsapp = normalize_phone(whatsapp_number) if whatsapp_number else None
     norm_id = id_number.strip().lower() if id_number else None
+    norm_username = username.strip().lower() if username and username.strip() else None
 
     queries = [("phone_number", {"phone_number": norm_phone}, norm_phone)]
     if norm_whatsapp:
         queries.append(("whatsapp_number", {"whatsapp_number": norm_whatsapp}, norm_whatsapp))
     if norm_id:
         queries.append(("id_number", {"id_number": norm_id}, norm_id))
+    if norm_username:
+        queries.append(("username", {"username": norm_username}, norm_username))
 
     matches = []
     first_doc = None

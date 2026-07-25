@@ -149,6 +149,7 @@ _FIELD_LABELS = {
     "phone_number":    "Phone number",
     "whatsapp_number": "Whatsapp number",
     "id_number":       "ID number",
+    "username":        "Account name",
 }
 
 
@@ -255,6 +256,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         phone_number=parsed["phone_number"],
         whatsapp_number=parsed["whatsapp_number"],
         id_number=parsed["id_number"],
+        username=parsed["username"],
     )
 
     sender = message.from_user
