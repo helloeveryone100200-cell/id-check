@@ -145,19 +145,42 @@ def user_html_mention(user) -> str:
     return f'<a href="tg://user?id={user.id}">{name}</a>'
 
 
+_FIELD_LABELS = {
+    "phone_number":    "Phone number",
+    "whatsapp_number": "Whatsapp number",
+    "id_number":       "ID number",
+}
+
+
 def format_duplicate_reply(
     template: str,
     *,
     user_mention: str,
     original_user: str,
-    matched_field: str,
+    matches: list,
 ) -> str:
-    """Substitute placeholders in the duplicate warning template."""
+    """Substitute placeholders in the duplicate warning template.
+
+    Builds a line per matched field:
+        Duplicate Phone number: 123456789
+        Duplicate Whatsapp number: 569875463
+    and replaces {matched_fields} (multi-line) and {matched_field} (first only,
+    kept for backward-compat with custom /setmsg templates).
+    """
+    lines = []
+    for m in matches:
+        label = _FIELD_LABELS.get(m["field"], m["field"].replace("_", " ").title())
+        lines.append(f"Duplicate {label}: <b>{m['value']}</b>")
+
+    matched_fields_block = "\n".join(lines)
+    first_field = _FIELD_LABELS.get(matches[0]["field"], matches[0]["field"].replace("_", " ").title()) if matches else ""
+
     return (
         template
         .replace("{user_mention}", user_mention)
         .replace("{original_user}", original_user)
-        .replace("{matched_field}", matched_field)
+        .replace("{matched_fields}", matched_fields_block)
+        .replace("{matched_field}", first_field)   # legacy compat
     )
 
 
@@ -241,21 +264,22 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if result["found"]:
         original_doc = result["doc"]
         original_user = original_doc.get("telegram_username") or str(original_doc.get("telegram_id", "unknown"))
-        matched_field = result["field"].replace("_", " ").title()
+        matches = result["matches"]
 
         template = db_module.get_duplicate_msg(db)
         reply_text = format_duplicate_reply(
             template,
             user_mention=sender_mention,
             original_user=original_user,
-            matched_field=matched_field,
+            matches=matches,
         )
 
         await message.reply_text(reply_text, parse_mode=ParseMode.HTML)
+        field_names = ", ".join(m["field"] for m in matches)
         logger.info(
-            "Duplicate detected for %s (field: %s, original submitter: %s)",
+            "Duplicate detected for %s (fields: %s, original submitter: %s)",
             sender_mention,
-            matched_field,
+            field_names,
             original_user,
         )
     else:
@@ -293,7 +317,8 @@ async def cmd_setmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         "<b>Duplicate placeholders:</b>\n"
         "  <code>{user_mention}</code> — user who submitted the duplicate\n"
         "  <code>{original_user}</code> — original submitter\n"
-        "  <code>{matched_field}</code> — duplicate field name\n\n"
+        "  <code>{matched_fields}</code> — all duplicate field lines (auto-generated)\n"
+        "  <code>{matched_field}</code> — first duplicate field name (legacy)\n\n"
         "<b>Welcome placeholder:</b>\n"
         "  <code>{name}</code> — user's display name\n\n"
         "HTML formatting and Telegram Premium Animated Emoji tags are supported."

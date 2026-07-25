@@ -84,30 +84,35 @@ def check_duplicate(db, phone_number: str, whatsapp_number: str | None = None, i
     Optional : whatsapp_number, id_number (only checked when provided)
 
     Returns a dict with keys:
-      - 'found'   (bool)      — whether a duplicate was detected
-      - 'doc'     (dict|None) — the first matching document
-      - 'field'   (str|None)  — which field triggered the duplicate
+      - 'found'   (bool)       — whether any duplicate was detected
+      - 'doc'     (dict|None)  — the first matching document
+      - 'matches' (list)       — list of {"field": str, "value": str} for every
+                                 field that matched; empty list when not found
     """
     coll = _submissions(db)
 
-    phone_number = normalize_phone(phone_number)
-    if whatsapp_number:
-        whatsapp_number = normalize_phone(whatsapp_number)
-    if id_number:
-        id_number = id_number.strip().lower()
+    norm_phone = normalize_phone(phone_number)
+    norm_whatsapp = normalize_phone(whatsapp_number) if whatsapp_number else None
+    norm_id = id_number.strip().lower() if id_number else None
 
-    queries = [("phone_number", {"phone_number": phone_number})]
-    if whatsapp_number:
-        queries.append(("whatsapp_number", {"whatsapp_number": whatsapp_number}))
-    if id_number:
-        queries.append(("id_number", {"id_number": id_number}))
+    queries = [("phone_number", {"phone_number": norm_phone}, norm_phone)]
+    if norm_whatsapp:
+        queries.append(("whatsapp_number", {"whatsapp_number": norm_whatsapp}, norm_whatsapp))
+    if norm_id:
+        queries.append(("id_number", {"id_number": norm_id}, norm_id))
 
-    for field, query in queries:
+    matches = []
+    first_doc = None
+    for field, query, value in queries:
         doc = coll.find_one(query)
         if doc:
-            return {"found": True, "doc": doc, "field": field}
+            if first_doc is None:
+                first_doc = doc
+            matches.append({"field": field, "value": value})
 
-    return {"found": False, "doc": None, "field": None}
+    if matches:
+        return {"found": True, "doc": first_doc, "matches": matches}
+    return {"found": False, "doc": None, "matches": []}
 
 
 def save_submission(
@@ -153,7 +158,7 @@ def _settings(db):
 DEFAULT_DUPLICATE_MSG = (
     "⚠️ <b>Duplicate detected!</b>\n\n"
     "Hey {user_mention}, this data was previously submitted by <b>{original_user}</b>.\n"
-    "Duplicate field: <b>{matched_field}</b>"
+    "{matched_fields}"
 )
 
 DEFAULT_START_MSG = (
