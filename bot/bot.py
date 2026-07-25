@@ -74,7 +74,7 @@ RE_USERNAME = re.compile(
     r".*username\s*-\s*(.+)$", re.IGNORECASE | re.MULTILINE
 )
 RE_PHONE = re.compile(
-    r".*phone\s*number\s*-\s*(.+)$", re.IGNORECASE | re.MULTILINE
+    r".*client\s*number\s*-\s*(.+)$", re.IGNORECASE | re.MULTILINE
 )
 RE_WHATSAPP = re.compile(
     r".*whatsapp\s*number\s*-\s*(.+)$", re.IGNORECASE | re.MULTILINE
@@ -146,7 +146,7 @@ def user_html_mention(user) -> str:
 
 
 _FIELD_LABELS = {
-    "phone_number":    "Phone number",
+    "phone_number":    "Client number",
     "whatsapp_number": "Whatsapp number",
     "id_number":       "ID number",
     "username":        "Account name",
