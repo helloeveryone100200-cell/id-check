@@ -172,7 +172,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         name = user.full_name or user.username or "there"
 
         db = db_module.get_db()
-        template = db_module.get_start_msg(db) if db else db_module.DEFAULT_START_MSG
+        template = db_module.get_start_msg(db) if db is not None else db_module.DEFAULT_START_MSG
 
         # Safely fetch bot username (may require an API call on first use)
         bot_info = await context.bot.get_me()
