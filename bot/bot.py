@@ -74,7 +74,7 @@ RE_USERNAME = re.compile(
     r".*username\s*-\s*(.+)$", re.IGNORECASE | re.MULTILINE
 )
 RE_PHONE = re.compile(
-    r".*client\s*number\s*-\s*(.+)$", re.IGNORECASE | re.MULTILINE
+    r".*(?:client|phone)\s*number\s*-\s*(.+)$", re.IGNORECASE | re.MULTILINE
 )
 RE_WHATSAPP = re.compile(
     r".*whatsapp\s*number\s*-\s*(.+)$", re.IGNORECASE | re.MULTILINE
