@@ -164,13 +164,17 @@ DEFAULT_DUPLICATE_MSG = (
 )
 
 DEFAULT_START_MSG = (
-    "Welcome, {name}!\n\n"
-    "I monitor group messages and flag duplicate submissions.\n\n"
-    "Send a message in the group with:\n"
-    "  Phone number - <your_number>\n"
-    "  (optional) Whatsapp number - <number>\n"
-    "  (optional) ID - <id>\n"
-    "  (optional) Username - <username>"
+    "👋 Welcome, {name}!\n\n"
+    "🤖 <b>What I do:</b>\n"
+    "I monitor group messages and automatically flag duplicate submissions "
+    "(phone numbers, WhatsApp numbers, IDs, usernames).\n\n"
+    "🎨 <b>I also create Telegram emoji &amp; sticker packs!</b>\n"
+    "Use the menu buttons below to get started.\n\n"
+    "📋 <b>Group submission format:</b>\n"
+    "<code>Phone number - 09xxxxxxxxx</code>\n"
+    "<code>Whatsapp number - 09xxxxxxxxx</code> (optional)\n"
+    "<code>ID - A123456</code> (optional)\n"
+    "<code>Username - @yourname</code> (optional)"
 )
 
 

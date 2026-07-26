@@ -311,15 +311,22 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user:
         return
+    name = user.full_name or user.first_name or "there"
     db = db_module.get_db()
     if db is not None:
         template = db_module.get_start_msg(db)
-        text = template.replace("{name}", user.full_name or user.first_name or "there")
+        text = template.replace("{name}", name)
     else:
-        text = f"Welcome, {user.full_name or 'there'}! 👋"
+        text = (
+            f"👋 Welcome, <b>{name}</b>!\n\n"
+            "🤖 <b>What I do:</b>\n"
+            "I monitor group messages and automatically flag duplicate submissions.\n\n"
+            "🎨 <b>I also create Telegram emoji &amp; sticker packs!</b>\n"
+            "Use the menu buttons below to get started."
+        )
 
     await update.message.reply_text(
-        text + "\n\n🎨 I can also create Telegram emoji & sticker packs for you!",
+        text,
         parse_mode=ParseMode.HTML,
         reply_markup=MAIN_KEYBOARD,
     )
