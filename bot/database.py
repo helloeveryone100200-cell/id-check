@@ -44,7 +44,6 @@ def get_db():
 
     try:
         _client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
-        # Quick connectivity check
         _client.admin.command("ping")
         db_name = os.getenv("MONGO_DB_NAME", "telegram_bot")
         _db = _client[db_name]
@@ -70,6 +69,10 @@ def _ensure_indexes(db) -> None:
     coll.create_index([("id_number", ASCENDING)], sparse=True, name="idx_id")
     coll.create_index([("username", ASCENDING)], sparse=True, name="idx_username")
     coll.create_index([("created_at", ASCENDING)], name="idx_created_at")
+
+    packs = db["sticker_packs"]
+    packs.create_index([("user_id", ASCENDING)], name="idx_pack_user_id")
+    packs.create_index([("pack_name", ASCENDING)], name="idx_pack_name")
     logger.info("MongoDB indexes ensured")
 
 
@@ -86,16 +89,10 @@ def check_duplicate(
 ):
     """
     Check whether any field already exists in the submissions collection.
-
-    Required : phone_number
-    Optional : whatsapp_number, id_number, username (only checked when provided
-               and non-empty)
-
     Returns a dict with keys:
       - 'found'   (bool)       — whether any duplicate was detected
       - 'doc'     (dict|None)  — the first matching document
-      - 'matches' (list)       — list of {"field": str, "value": str} for every
-                                 field that matched; empty list when not found
+      - 'matches' (list)       — list of {"field": str, "value": str}
     """
     coll = _submissions(db)
 
@@ -114,75 +111,71 @@ def check_duplicate(
 
     matches = []
     first_doc = None
-    for field, query, value in queries:
+    for field_name, query, value in queries:
         doc = coll.find_one(query)
         if doc:
+            matches.append({"field": field_name, "value": value})
             if first_doc is None:
                 first_doc = doc
-            matches.append({"field": field, "value": value})
 
-    if matches:
-        return {"found": True, "doc": first_doc, "matches": matches}
-    return {"found": False, "doc": None, "matches": []}
+    return {
+        "found": bool(matches),
+        "doc": first_doc,
+        "matches": matches,
+    }
 
 
 def save_submission(
     db,
-    *,
     telegram_id: int,
     telegram_username: str,
     username: str,
     phone_number: str,
-    whatsapp_number: str | None = None,
-    id_number: str | None = None,
+    whatsapp_number: str | None,
+    id_number: str | None,
 ) -> bool:
-    """Insert a new submission. Returns True on success."""
+    """Save a new submission. Returns True on success."""
     coll = _submissions(db)
     doc = {
         "telegram_id": telegram_id,
         "telegram_username": telegram_username,
-        "username": username.strip().lower(),
+        "username": username.lower() if username else "",
         "phone_number": normalize_phone(phone_number),
+        "whatsapp_number": normalize_phone(whatsapp_number) if whatsapp_number else None,
+        "id_number": id_number.strip().lower() if id_number else None,
         "created_at": datetime.now(timezone.utc),
     }
-    if whatsapp_number:
-        doc["whatsapp_number"] = normalize_phone(whatsapp_number)
-    if id_number:
-        doc["id_number"] = id_number.strip().lower()
-
     try:
         coll.insert_one(doc)
         return True
     except Exception as exc:
-        logger.error("Failed to save submission: %s", exc)
+        logger.error("Failed to insert submission: %s", exc)
         return False
 
 
 # ---------------------------------------------------------------------------
-# bot_settings collection
+# settings collection
 # ---------------------------------------------------------------------------
 
-def _settings(db):
-    return db["bot_settings"]
-
-
 DEFAULT_DUPLICATE_MSG = (
-    "⚠️ <b>Duplicate detected!</b>\n\n"
-    "Hey {user_mention}, this data was previously submitted by <b>{original_user}</b>.\n"
-    "{matched_fields}"
+    "{user_mention} ⚠️ Duplicate detected!\n\n"
+    "{matched_fields}\n\n"
+    "Originally submitted by: {original_user}"
 )
 
 DEFAULT_START_MSG = (
-    "👋 Hello, <b>{name}</b>!\n\n"
-    "I'm a <b>duplicate submission checker bot</b>.\n\n"
-    "📋 <b>How it works:</b>\n"
-    "Send a message in the group with this format:\n\n"
-    "<code>Username - your_username\n"
-    "Phone number - 09xxxxxxxxx\n"
-    "Whatsapp number - 09xxxxxxxxx\n"
-    "ID - (optional)</code>\n\n"
-    "I will automatically check for duplicates and notify if any are found."
+    "Welcome, {name}!\n\n"
+    "I monitor group messages and flag duplicate submissions.\n\n"
+    "Send a message in the group with:\n"
+    "  Phone number - <your_number>\n"
+    "  (optional) Whatsapp number - <number>\n"
+    "  (optional) ID - <id>\n"
+    "  (optional) Username - <username>"
 )
+
+
+def _settings(db):
+    return db["settings"]
 
 
 def _get_setting(db, key: str, default: str) -> str:
@@ -232,3 +225,45 @@ def reset_setting(db, key: str) -> bool:
     except Exception as exc:
         logger.error("Failed to reset %s: %s", key, exc)
         return False
+
+
+# ---------------------------------------------------------------------------
+# sticker_packs collection (new)
+# ---------------------------------------------------------------------------
+
+def save_sticker_pack(
+    db,
+    user_id: int,
+    pack_name: str,
+    pack_title: str,
+    pack_type: str,
+    sticker_count: int = 0,
+) -> bool:
+    """Save a newly created sticker/emoji pack record."""
+    coll = db["sticker_packs"]
+    doc = {
+        "user_id": user_id,
+        "pack_name": pack_name,
+        "pack_title": pack_title,
+        "pack_type": pack_type,        # "custom_emoji", "regular", "brand_emoji", "love_status"
+        "sticker_count": sticker_count,
+        "created_at": datetime.now(timezone.utc),
+    }
+    try:
+        coll.insert_one(doc)
+        return True
+    except Exception as exc:
+        logger.error("Failed to save sticker pack: %s", exc)
+        return False
+
+
+def get_user_packs(db, user_id: int) -> list:
+    """Return all sticker/emoji packs created by a user."""
+    coll = db["sticker_packs"]
+    try:
+        return list(
+            coll.find({"user_id": user_id}).sort("created_at", -1).limit(50)
+        )
+    except Exception as exc:
+        logger.error("Failed to get user packs: %s", exc)
+        return []
