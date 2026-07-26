@@ -131,14 +131,23 @@ RE_VALID_LINK = re.compile(r"^[A-Za-z0-9_]{1,48}$")
 # ---------------------------------------------------------------------------
 
 def _make_square_webp(data: bytes, size: int) -> BytesIO:
-    """Convert raw image bytes to a square WebP with transparent background."""
-    img = Image.open(BytesIO(data)).convert("RGBA")
+    """Convert raw image bytes to a static square WebP with transparent background."""
+    raw = BytesIO(data)
+    img = Image.open(raw)
+    # Always take the FIRST frame only — prevents animated WebP which causes
+    # 'Sticker_video_dimensions' error when Telegram treats it as a video sticker.
+    try:
+        img.seek(0)
+    except (AttributeError, EOFError):
+        pass
+    img = img.convert("RGBA")
     img.thumbnail((size, size), Image.LANCZOS)
     canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     offset = ((size - img.width) // 2, (size - img.height) // 2)
     canvas.paste(img, offset, img)
     out = BytesIO()
-    canvas.save(out, format="WEBP")
+    # save_all=False ensures a single-frame (non-animated) WebP is written
+    canvas.save(out, format="WEBP", save_all=False)
     out.name = "sticker.webp"
     out.seek(0)
     return out
@@ -209,34 +218,145 @@ def _random_link(length: int = 8) -> str:
     return "".join(random.choices(string.ascii_lowercase + string.digits, k=length))
 
 
-async def _download_photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bytes | None:
-    """Download the largest photo from a photo message."""
-    if update.message.photo:
-        photo = update.message.photo[-1]
-        file = await context.bot.get_file(photo.file_id)
-        return await file.download_as_bytearray()
-    if update.message.document and update.message.document.mime_type.startswith("image/"):
-        file = await context.bot.get_file(update.message.document.file_id)
-        return await file.download_as_bytearray()
-    return None
-
-
-async def _upload_emoji_sticker(
+async def _make_input_sticker(
+    update: Update,
     context: ContextTypes.DEFAULT_TYPE,
-    user_id: int,
-    webp_io: BytesIO,
-) -> str | None:
-    """Upload a WebP file and return its file_id for use in a sticker set."""
-    try:
-        uploaded = await context.bot.upload_sticker_file(
-            user_id=user_id,
-            sticker=webp_io,
-            sticker_format=StickerFormat.STATIC,
+    size: int,
+    emoji_list: list[str],
+) -> tuple["InputSticker | None", "str | None"]:
+    """
+    Build an InputSticker from whatever media the user sent.
+    Returns (InputSticker, None) on success, or (None, error_text) on failure.
+
+    Processing rules:
+    - Static sticker → use file_id directly (already correct WebP format)
+    - Animated / video sticker → download and convert first frame to static WebP
+    - Photo / image document → download, resize to `size`x`size`, save as static WebP
+    """
+    msg = update.message
+
+    if msg.sticker:
+        sticker = msg.sticker
+        if not sticker.is_animated and not sticker.is_video:
+            # Already a static .webp — pass file_id straight through
+            return (
+                InputSticker(
+                    sticker=sticker.file_id,
+                    emoji_list=emoji_list,
+                    format=StickerFormat.STATIC,
+                ),
+                None,
+            )
+        # Animated / video: pull bytes and extract the first frame
+        try:
+            f = await context.bot.get_file(sticker.file_id)
+            data = bytes(await f.download_as_bytearray())
+            webp_io = _make_square_webp(data, size)
+            return (
+                InputSticker(sticker=webp_io, emoji_list=emoji_list, format=StickerFormat.STATIC),
+                None,
+            )
+        except Exception as exc:
+            logger.error("animated sticker conversion failed: %s", exc)
+            return None, "⚠️ Could not convert this animated sticker. Try a static image instead."
+
+    # Photo message
+    if msg.photo:
+        f = await context.bot.get_file(msg.photo[-1].file_id)
+        data = bytes(await f.download_as_bytearray())
+        webp_io = _make_square_webp(data, size)
+        return InputSticker(sticker=webp_io, emoji_list=emoji_list, format=StickerFormat.STATIC), None
+
+    # Image sent as document
+    if msg.document and msg.document.mime_type and msg.document.mime_type.startswith("image/"):
+        f = await context.bot.get_file(msg.document.file_id)
+        data = bytes(await f.download_as_bytearray())
+        webp_io = _make_square_webp(data, size)
+        return InputSticker(sticker=webp_io, emoji_list=emoji_list, format=StickerFormat.STATIC), None
+
+    return None, "⚠️ Please send a photo, sticker, or image file."
+
+
+async def _add_sticker_and_reply(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    processing_msg,
+    input_sticker: "InputSticker",
+    pack_name: str,
+    pack_title: str,
+    emoji_list: list[str],
+    sticker_type: "StickerType",
+    link_prefix: str,
+    max_count: int,
+) -> bool:
+    """
+    Create the pack (first sticker) or add to an existing one.
+    Edits processing_msg with the result.
+    Returns True on success, False on failure.
+    """
+    user = update.effective_user
+    stickers_done: list = context.user_data.setdefault("stickers_uploaded", [])
+    pack_created: bool = context.user_data.get("pack_created", False)
+    link_base: str = context.user_data["pack_link_base"]
+
+    if len(stickers_done) >= max_count:
+        await processing_msg.edit_text(
+            f"⚠️ Maximum limit reached ({max_count} items). Use /done to finish the pack."
         )
-        return uploaded.file_id
+        return False
+
+    try:
+        if not pack_created:
+            await context.bot.create_new_sticker_set(
+                user_id=user.id,
+                name=pack_name,
+                title=pack_title,
+                stickers=[input_sticker],
+                sticker_type=sticker_type,
+            )
+            context.user_data["pack_created"] = True
+        else:
+            await context.bot.add_sticker_to_set(
+                user_id=user.id,
+                name=pack_name,
+                sticker=input_sticker,
+            )
+
+        stickers_done.append(1)
+        count = len(stickers_done)
+        await processing_msg.edit_text(
+            f"✅ Sticker added to the pack <b>{pack_title}</b>\n"
+            f"Emoji in pack: <b>{count}</b>\n\n"
+            f"Send me the next images/GIFs/stickers to be added to the pack.\n\n"
+            f"⏰ <i>It will become available to all Telegram users within an hour. "
+            f"(Or re-add the sticker pack to see the changes right away)</i>\n\n"
+            f"/done — finish &amp; get pack link",
+            parse_mode=ParseMode.HTML,
+        )
+        return True
+
     except Exception as exc:
-        logger.error("upload_sticker_file failed: %s", exc)
-        return None
+        logger.error("create/add sticker failed: %s", exc)
+        err = str(exc)
+        if "STICKERSET_INVALID" in err or "name" in err.lower():
+            await processing_msg.edit_text(
+                "❌ Pack name already taken or invalid.\n"
+                "Please /cancel and start over with a different link."
+            )
+        elif "video_dimensions" in err.lower() or "dimensions" in err.lower():
+            await processing_msg.edit_text(
+                "❌ Image dimensions not supported.\n"
+                "Please send a regular JPEG or PNG photo and try again."
+            )
+        elif "STICKERSET_NOT_MODIFIED" in err:
+            await processing_msg.edit_text(
+                "⚠️ That sticker is already in the pack. Send a different image."
+            )
+        else:
+            await processing_msg.edit_text(
+                f"❌ Failed: {err}\n\nTry a different image or /cancel."
+            )
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -399,99 +519,57 @@ async def emoji_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 
 async def emoji_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
+    """Receive one image/sticker at a time, create pack on first, add_sticker_to_set after."""
     msg = update.message
+    processing_msg = await msg.reply_text("⏳ Creating sticker, wait...")
 
-    # Handle sticker input
-    if msg.sticker:
-        sticker = msg.sticker
-        context.user_data["stickers_uploaded"].append(sticker.file_id)
-        count = len(context.user_data["stickers_uploaded"])
-        await msg.reply_text(f"✅ Sticker added! Total: {count}\nSend more or /done to finish.")
+    input_sticker, error = await _make_input_sticker(update, context, 100, ["⭐"])
+    if error:
+        await processing_msg.edit_text(error)
         return EMOJI_MEDIA
 
-    # Handle photo / document input
-    data = await _download_photo(update, context)
-    if data is None:
-        await msg.reply_text("⚠️ Please send a photo, sticker, or image file.\n/done to finish.")
-        return EMOJI_MEDIA
-
-    await msg.reply_text("⏳ Processing image…")
-    webp_io = _make_square_webp(bytes(data), 100)
-    file_id = await _upload_emoji_sticker(context, user.id, webp_io)
-    if file_id is None:
-        await msg.reply_text("❌ Failed to upload image. Please try another.")
-        return EMOJI_MEDIA
-
-    context.user_data["stickers_uploaded"].append(file_id)
-    count = len(context.user_data["stickers_uploaded"])
-    await msg.reply_text(f"✅ Image added! Total: {count}\nSend more or /done to finish.")
+    await _add_sticker_and_reply(
+        update, context, processing_msg,
+        input_sticker=input_sticker,
+        pack_name=context.user_data["pack_name"],
+        pack_title=context.user_data["pack_title"],
+        emoji_list=["⭐"],
+        sticker_type=StickerType.CUSTOM_EMOJI,
+        link_prefix="addemoji",
+        max_count=200,
+    )
     return EMOJI_MEDIA
 
 
 async def emoji_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
     stickers = context.user_data.get("stickers_uploaded", [])
-    if not stickers:
+    if not stickers or not context.user_data.get("pack_created"):
         await update.message.reply_text(
             "❌ No images added yet. Send at least one photo/sticker first.\n/cancel to cancel."
         )
         return EMOJI_MEDIA
 
+    user = update.effective_user
     pack_name = context.user_data["pack_name"]
     pack_title = context.user_data["pack_title"]
-    pack_type = context.user_data.get("pack_type", "custom_emoji")
+    link_base = context.user_data.get("pack_link_base", pack_name)
+    count = len(stickers)
 
-    await update.message.reply_text("⏳ Creating your emoji pack, please wait…")
-
-    input_stickers = [
-        InputSticker(sticker=fid, emoji_list=["⭐"], format=StickerFormat.STATIC)
-        for fid in stickers[:200]
-    ]
-
-    try:
-        await context.bot.create_new_sticker_set(
-            user_id=user.id,
-            name=pack_name,
-            title=pack_title,
-            stickers=input_stickers,
-            sticker_type=StickerType.CUSTOM_EMOJI,
+    db = db_module.get_db()
+    if db is not None:
+        db_module.save_sticker_pack(
+            db, user.id, pack_name, pack_title,
+            context.user_data.get("pack_type", "custom_emoji"), count,
         )
-        # Save to DB
-        db = db_module.get_db()
-        if db is not None:
-            db_module.save_sticker_pack(
-                db,
-                user_id=user.id,
-                pack_name=pack_name,
-                pack_title=pack_title,
-                pack_type=pack_type,
-                sticker_count=len(input_stickers),
-            )
-        link_base = context.user_data.get("pack_link_base", pack_name)
-        await update.message.reply_text(
-            f"🎉 <b>Congratulations!</b> Your premium emoji pack is ready!\n\n"
-            f"📦 <b>{pack_title}</b>\n"
-            f"🔗 <a href='https://t.me/addemoji/{link_base}'>t.me/addemoji/{link_base}</a>\n"
-            f"🖼 Emojis: {len(input_stickers)}",
-            parse_mode=ParseMode.HTML,
-            reply_markup=MAIN_KEYBOARD,
-        )
-    except Exception as exc:
-        logger.error("create_new_sticker_set (emoji) failed: %s", exc)
-        err = str(exc)
-        if "STICKERSET_INVALID" in err or "name" in err.lower():
-            await update.message.reply_text(
-                "❌ That pack name is already taken or invalid.\n"
-                "Use /start → Create Premium emoji again with a different link.",
-                reply_markup=MAIN_KEYBOARD,
-            )
-        else:
-            await update.message.reply_text(
-                f"❌ Failed to create pack: {err}\n\nPlease try again.",
-                reply_markup=MAIN_KEYBOARD,
-            )
 
+    await update.message.reply_text(
+        f"🎉 <b>Congratulations!</b> Your premium emoji pack is ready!\n\n"
+        f"📦 <b>{pack_title}</b>\n"
+        f"🔗 <a href='https://t.me/addemoji/{link_base}'>t.me/addemoji/{link_base}</a>\n"
+        f"✨ Emojis: {count}",
+        parse_mode=ParseMode.HTML,
+        reply_markup=MAIN_KEYBOARD,
+    )
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -561,82 +639,54 @@ async def sticker_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 
 async def sticker_media(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
+    """Receive one image/sticker at a time — create pack on first, add after."""
     msg = update.message
+    processing_msg = await msg.reply_text("⏳ Creating sticker, wait...")
 
-    # Handle sticker forwarding
-    if msg.sticker:
-        sticker = msg.sticker
-        context.user_data["stickers_uploaded"].append(sticker.file_id)
-        count = len(context.user_data["stickers_uploaded"])
-        await msg.reply_text(f"✅ Sticker added! Total: {count}\nSend more or /done to finish.")
+    input_sticker, error = await _make_input_sticker(update, context, 512, ["⭐"])
+    if error:
+        await processing_msg.edit_text(error)
         return STICKER_MEDIA
 
-    data = await _download_photo(update, context)
-    if data is None:
-        await msg.reply_text("⚠️ Please send a photo or image file.\n/done to finish.")
-        return STICKER_MEDIA
-
-    await msg.reply_text("⏳ Processing image…")
-    webp_io = _make_square_webp(bytes(data), 512)
-    file_id = await _upload_emoji_sticker(context, user.id, webp_io)
-    if file_id is None:
-        await msg.reply_text("❌ Failed to upload image. Please try another.")
-        return STICKER_MEDIA
-
-    context.user_data["stickers_uploaded"].append(file_id)
-    count = len(context.user_data["stickers_uploaded"])
-    await msg.reply_text(f"✅ Image added! Total: {count}\nSend more or /done to finish.")
+    await _add_sticker_and_reply(
+        update, context, processing_msg,
+        input_sticker=input_sticker,
+        pack_name=context.user_data["pack_name"],
+        pack_title=context.user_data["pack_title"],
+        emoji_list=["⭐"],
+        sticker_type=StickerType.REGULAR,
+        link_prefix="addstickers",
+        max_count=120,
+    )
     return STICKER_MEDIA
 
 
 async def sticker_done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    user = update.effective_user
     stickers = context.user_data.get("stickers_uploaded", [])
-    if not stickers:
+    if not stickers or not context.user_data.get("pack_created"):
         await update.message.reply_text(
             "❌ No images added yet. Send at least one photo first.\n/cancel to cancel."
         )
         return STICKER_MEDIA
 
+    user = update.effective_user
     pack_name = context.user_data["pack_name"]
     pack_title = context.user_data["pack_title"]
-    await update.message.reply_text("⏳ Creating your sticker pack, please wait…")
+    link_base = context.user_data.get("pack_link_base", pack_name)
+    count = len(stickers)
 
-    input_stickers = [
-        InputSticker(sticker=fid, emoji_list=["⭐"], format=StickerFormat.STATIC)
-        for fid in stickers[:120]
-    ]
+    db = db_module.get_db()
+    if db is not None:
+        db_module.save_sticker_pack(db, user.id, pack_name, pack_title, "regular", count)
 
-    try:
-        await context.bot.create_new_sticker_set(
-            user_id=user.id,
-            name=pack_name,
-            title=pack_title,
-            stickers=input_stickers,
-            sticker_type=StickerType.REGULAR,
-        )
-        db = db_module.get_db()
-        if db is not None:
-            db_module.save_sticker_pack(
-                db, user.id, pack_name, pack_title, "regular", len(input_stickers)
-            )
-        link_base = context.user_data.get("pack_link_base", pack_name)
-        await update.message.reply_text(
-            f"🎉 <b>Sticker pack created!</b>\n\n"
-            f"📦 <b>{pack_title}</b>\n"
-            f"🔗 <a href='https://t.me/addstickers/{link_base}'>t.me/addstickers/{link_base}</a>\n"
-            f"🖼 Stickers: {len(input_stickers)}",
-            parse_mode=ParseMode.HTML,
-            reply_markup=MAIN_KEYBOARD,
-        )
-    except Exception as exc:
-        logger.error("create_new_sticker_set (sticker) failed: %s", exc)
-        await update.message.reply_text(
-            f"❌ Failed to create pack: {exc}\n\nPlease try again.",
-            reply_markup=MAIN_KEYBOARD,
-        )
-
+    await update.message.reply_text(
+        f"🎉 <b>Sticker pack created!</b>\n\n"
+        f"📦 <b>{pack_title}</b>\n"
+        f"🔗 <a href='https://t.me/addstickers/{link_base}'>t.me/addstickers/{link_base}</a>\n"
+        f"🖼 Stickers: {count}",
+        parse_mode=ParseMode.HTML,
+        reply_markup=MAIN_KEYBOARD,
+    )
     context.user_data.clear()
     return ConversationHandler.END
 
