@@ -69,10 +69,6 @@ def _ensure_indexes(db) -> None:
     coll.create_index([("id_number", ASCENDING)], sparse=True, name="idx_id")
     coll.create_index([("username", ASCENDING)], sparse=True, name="idx_username")
     coll.create_index([("created_at", ASCENDING)], name="idx_created_at")
-
-    packs = db["sticker_packs"]
-    packs.create_index([("user_id", ASCENDING)], name="idx_pack_user_id")
-    packs.create_index([("pack_name", ASCENDING)], name="idx_pack_name")
     logger.info("MongoDB indexes ensured")
 
 
@@ -96,9 +92,9 @@ def check_duplicate(
     """
     coll = _submissions(db)
 
-    norm_phone = normalize_phone(phone_number)
+    norm_phone    = normalize_phone(phone_number)
     norm_whatsapp = normalize_phone(whatsapp_number) if whatsapp_number else None
-    norm_id = id_number.strip().lower() if id_number else None
+    norm_id       = id_number.strip().lower() if id_number else None
     norm_username = username.strip().lower() if username and username.strip() else None
 
     queries = [("phone_number", {"phone_number": norm_phone}, norm_phone)]
@@ -168,8 +164,6 @@ DEFAULT_START_MSG = (
     "🤖 <b>What I do:</b>\n"
     "I monitor group messages and automatically flag duplicate submissions "
     "(phone numbers, WhatsApp numbers, IDs, usernames).\n\n"
-    "🎨 <b>I also create Telegram emoji &amp; sticker packs!</b>\n"
-    "Use the menu buttons below to get started.\n\n"
     "📋 <b>Group submission format:</b>\n"
     "<code>Phone number - 09xxxxxxxxx</code>\n"
     "<code>Whatsapp number - 09xxxxxxxxx</code> (optional)\n"
@@ -229,45 +223,3 @@ def reset_setting(db, key: str) -> bool:
     except Exception as exc:
         logger.error("Failed to reset %s: %s", key, exc)
         return False
-
-
-# ---------------------------------------------------------------------------
-# sticker_packs collection (new)
-# ---------------------------------------------------------------------------
-
-def save_sticker_pack(
-    db,
-    user_id: int,
-    pack_name: str,
-    pack_title: str,
-    pack_type: str,
-    sticker_count: int = 0,
-) -> bool:
-    """Save a newly created sticker/emoji pack record."""
-    coll = db["sticker_packs"]
-    doc = {
-        "user_id": user_id,
-        "pack_name": pack_name,
-        "pack_title": pack_title,
-        "pack_type": pack_type,        # "custom_emoji", "regular", "brand_emoji", "love_status"
-        "sticker_count": sticker_count,
-        "created_at": datetime.now(timezone.utc),
-    }
-    try:
-        coll.insert_one(doc)
-        return True
-    except Exception as exc:
-        logger.error("Failed to save sticker pack: %s", exc)
-        return False
-
-
-def get_user_packs(db, user_id: int) -> list:
-    """Return all sticker/emoji packs created by a user."""
-    coll = db["sticker_packs"]
-    try:
-        return list(
-            coll.find({"user_id": user_id}).sort("created_at", -1).limit(50)
-        )
-    except Exception as exc:
-        logger.error("Failed to get user packs: %s", exc)
-        return []
