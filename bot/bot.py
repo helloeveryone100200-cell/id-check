@@ -30,10 +30,14 @@ from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
+    ConversationHandler,
     ContextTypes,
     MessageHandler,
     filters,
 )
+
+# Conversation state
+SETEMOJI_WAIT = 0
 
 import database as db_module
 
@@ -267,39 +271,25 @@ async def cmd_setmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text("❌ Failed to update the message.")
 
 
-async def cmd_setemoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Set an animated emoji for a duplicate-message field.
-
-    Usage:
-      /setemoji <field> <emoji_id> <fallback_emoji>
-
-    Fields:  phone | whatsapp | id | username
-    Example: /setemoji phone 5368324170671202286 📞
-             /setemoji id    5368324170671202286 🪪
-
-    Find emoji_id: forward any custom emoji to @RawDataBot and read
-    the `custom_emoji_id` value from its reply.
-    """
+async def cmd_setemoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Step 1 — admin sends /setemoji <field>, bot asks for the emoji."""
     user = update.effective_user
     if not user or user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ Not authorised.")
-        return
+        return ConversationHandler.END
 
     HELP = (
-        "Usage: <code>/setemoji &lt;field&gt; &lt;emoji_id&gt; &lt;fallback&gt;</code>\n\n"
+        "Usage: <code>/setemoji &lt;field&gt;</code>\n\n"
         "Fields: <code>phone</code> | <code>whatsapp</code> | <code>id</code> | <code>username</code>\n\n"
-        "Example:\n"
-        "<code>/setemoji phone 5368324170671202286 📞</code>\n\n"
-        "💡 To find an emoji_id: forward any custom animated emoji to "
-        "@RawDataBot and copy the <code>custom_emoji_id</code> value."
+        "Example: <code>/setemoji phone</code>"
     )
 
-    args = (context.args or [])
-    if len(args) < 3:
+    args = context.args or []
+    if not args:
         await update.message.reply_text(HELP, parse_mode=ParseMode.HTML)
-        return
+        return ConversationHandler.END
 
-    alias, emoji_id, fallback = args[0].lower(), args[1], args[2]
+    alias = args[0].lower()
     field = db_module.FIELD_ALIASES.get(alias)
     if not field:
         await update.message.reply_text(
@@ -307,25 +297,70 @@ async def cmd_setemoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             "Use: <code>phone</code> | <code>whatsapp</code> | <code>id</code> | <code>username</code>",
             parse_mode=ParseMode.HTML,
         )
-        return
+        return ConversationHandler.END
 
-    if not emoji_id.isdigit():
-        await update.message.reply_text("❌ emoji_id must be a number.\n" + HELP, parse_mode=ParseMode.HTML)
-        return
+    context.user_data["setemoji_field"] = field
+    context.user_data["setemoji_alias"] = alias
+    await update.message.reply_text(
+        f"🎭 Send the <b>animated emoji</b> you want to use for "
+        f"<b>{FIELD_NAMES.get(field, alias)}</b>.\n\n"
+        "/cancel — to cancel",
+        parse_mode=ParseMode.HTML,
+    )
+    return SETEMOJI_WAIT
+
+
+async def setemoji_receive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Step 2 — extract custom_emoji entity from the message and save."""
+    msg = update.message
+    entities = list(msg.entities or []) + list(msg.caption_entities or [])
+    text = msg.text or msg.caption or ""
+
+    custom_emoji_id = None
+    fallback = None
+    for ent in entities:
+        if ent.type == "custom_emoji":
+            custom_emoji_id = ent.custom_emoji_id
+            # Extract the visible character(s) the entity covers
+            fallback = msg.parse_entity(ent)
+            break
+
+    if not custom_emoji_id:
+        await msg.reply_text(
+            "❌ No animated emoji found in that message.\n"
+            "Please send a <b>custom animated emoji</b> (not a regular emoji).\n\n"
+            "/cancel — to cancel",
+            parse_mode=ParseMode.HTML,
+        )
+        return SETEMOJI_WAIT
+
+    field = context.user_data["setemoji_field"]
+    alias = context.user_data["setemoji_alias"]
 
     db = db_module.get_db()
     if db is None:
-        await update.message.reply_text("❌ Database is unavailable.")
-        return
+        await msg.reply_text("❌ Database is unavailable.")
+        context.user_data.clear()
+        return ConversationHandler.END
 
-    if db_module.set_field_emoji(db, field, emoji_id, fallback):
-        preview = f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
-        await update.message.reply_text(
-            f"✅ Emoji for <b>{alias}</b> updated!\n\nPreview: {preview} {FIELD_NAMES.get(field, field)}",
+    if db_module.set_field_emoji(db, field, custom_emoji_id, fallback):
+        preview = f'<tg-emoji emoji-id="{custom_emoji_id}">{fallback}</tg-emoji>'
+        await msg.reply_text(
+            f"✅ Emoji for <b>{alias}</b> updated!\n\n"
+            f"Preview: {preview} {FIELD_NAMES.get(field, field)}",
             parse_mode=ParseMode.HTML,
         )
     else:
-        await update.message.reply_text("❌ Failed to save. Please try again.")
+        await msg.reply_text("❌ Failed to save. Please try again.")
+
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+async def setemoji_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    context.user_data.clear()
+    await update.message.reply_text("❌ Cancelled.")
+    return ConversationHandler.END
 
 
 async def cmd_getemoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -355,8 +390,8 @@ async def cmd_getemoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     text = (
         "🎭 <b>Animated emoji settings:</b>\n\n"
         + "\n".join(lines)
-        + "\n\n<i>Change with: /setemoji &lt;field&gt; &lt;emoji_id&gt; &lt;fallback&gt;</i>\n"
-        "<i>Reset with: /resetemoji &lt;field&gt;</i>"
+        + "\n\n<i>Change: /setemoji &lt;field&gt;</i>\n"
+        "<i>Reset: /resetemoji &lt;field&gt;</i>"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
@@ -521,9 +556,21 @@ async def run_bot():
     application.add_handler(CommandHandler("setmsg",    cmd_setmsg,    filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("getmsg",    cmd_getmsg,    filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("resetmsg",  cmd_resetmsg,  filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("setemoji",  cmd_setemoji,  filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("getemoji",  cmd_getemoji,  filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("resetemoji",cmd_resetemoji,filters=filters.ChatType.PRIVATE))
+    # /setemoji — 2-step conversation (private only)
+    setemoji_conv = ConversationHandler(
+        entry_points=[CommandHandler("setemoji", cmd_setemoji, filters=filters.ChatType.PRIVATE)],
+        states={
+            SETEMOJI_WAIT: [
+                MessageHandler(filters.Regex("^/cancel$"), setemoji_cancel),
+                MessageHandler(filters.ALL & ~filters.COMMAND, setemoji_receive),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", setemoji_cancel)],
+        allow_reentry=True,
+    )
+    application.add_handler(setemoji_conv)
+    application.add_handler(CommandHandler("getemoji",   cmd_getemoji,   filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("resetemoji", cmd_resetemoji, filters=filters.ChatType.PRIVATE))
 
     # Group ID-check listener
     application.add_handler(
