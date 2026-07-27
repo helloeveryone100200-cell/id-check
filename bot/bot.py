@@ -25,7 +25,7 @@ try:
 except ImportError:
     pass
 
-from telegram import Update, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder,
@@ -171,6 +171,29 @@ def format_duplicate_reply(
 # /start
 # ---------------------------------------------------------------------------
 
+def _build_start_keyboard(bot_username: str, custom_buttons: list) -> InlineKeyboardMarkup:
+    """Build the /start inline keyboard: 3 default buttons + any custom buttons."""
+    add_url   = f"https://t.me/{bot_username}?startgroup=start"
+    share_url = f"https://t.me/share/url?url=https://t.me/{bot_username}"
+    author_url = "https://t.me/yasha_sangi"
+
+    keyboard = [
+        [
+            InlineKeyboardButton("➕ Add me to group", url=add_url),
+            InlineKeyboardButton("📤 Share bot",       url=share_url),
+        ],
+        [
+            InlineKeyboardButton("👤 Author", url=author_url),
+        ],
+    ]
+
+    # Append custom buttons — one per row
+    for btn in custom_buttons:
+        keyboard.append([InlineKeyboardButton(btn["text"], url=btn["url"])])
+
+    return InlineKeyboardMarkup(keyboard)
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user:
@@ -180,6 +203,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if db is not None:
         template = db_module.get_start_msg(db)
         text = template.replace("{name}", name)
+        custom_buttons = db_module.get_start_buttons(db)
     else:
         text = (
             f"👋 Welcome, <b>{name}</b>!\n\n"
@@ -192,7 +216,15 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "<code>ID - A123456</code> (optional)\n"
             "<code>Username - @yourname</code> (optional)"
         )
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=ReplyKeyboardRemove())
+        custom_buttons = []
+
+    bot_username = context.bot.username or ""
+    keyboard = _build_start_keyboard(bot_username, custom_buttons)
+    await update.message.reply_text(
+        text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=keyboard,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -428,6 +460,165 @@ async def cmd_resetemoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("❌ Failed to reset.")
 
 
+# ---------------------------------------------------------------------------
+# /start inline-button management (admin only)
+# ---------------------------------------------------------------------------
+
+async def cmd_addbutton(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Add a custom inline button to the /start keyboard.
+
+    Usage:  /addbutton Button Label | https://example.com
+    The label may contain any Unicode text, including animated emoji pasted directly.
+    """
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ Not authorised.")
+        return
+
+    HELP = (
+        "Usage: <code>/addbutton Label | URL</code>\n\n"
+        "Example:\n"
+        "<code>/addbutton 🌐 Visit website | https://example.com</code>\n\n"
+        "You can paste an animated emoji directly into the label."
+    )
+
+    # Use text_html so animated emoji pasted in the label are preserved as-is
+    raw_html = update.message.text_html or ""
+    # Strip the command prefix (/addbutton ), keep the rest
+    body = re.sub(r"^/\S+\s*", "", raw_html, count=1).strip()
+
+    if "|" not in body:
+        await update.message.reply_text(HELP, parse_mode=ParseMode.HTML)
+        return
+
+    label_part, _, url_part = body.partition("|")
+    label = label_part.strip()
+    url   = url_part.strip()
+
+    if not label or not url:
+        await update.message.reply_text(HELP, parse_mode=ParseMode.HTML)
+        return
+
+    if not (url.startswith("http://") or url.startswith("https://") or url.startswith("tg://")):
+        await update.message.reply_text(
+            "❌ URL must start with <code>http://</code>, <code>https://</code>, or <code>tg://</code>.",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    db = db_module.get_db()
+    if db is None:
+        await update.message.reply_text("❌ Database is unavailable.")
+        return
+
+    if db_module.add_start_button(db, label, url):
+        buttons = db_module.get_start_buttons(db)
+        await update.message.reply_text(
+            f"✅ Button added (#{len(buttons)})!\n\n"
+            f"Label: {label}\nURL: <code>{url}</code>",
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        await update.message.reply_text("❌ Failed to add button.")
+
+
+async def cmd_listbuttons(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List all custom inline buttons (admin only)."""
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ Not authorised.")
+        return
+
+    db = db_module.get_db()
+    if db is None:
+        await update.message.reply_text("❌ Database is unavailable.")
+        return
+
+    buttons = db_module.get_start_buttons(db)
+    if not buttons:
+        await update.message.reply_text(
+            "ℹ️ No custom buttons added yet.\n\n"
+            "Default buttons (always shown):\n"
+            "  1. ➕ Add me to group\n"
+            "  2. 📤 Share bot\n"
+            "  3. 👤 Author\n\n"
+            "Add one with: <code>/addbutton Label | URL</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    lines = [
+        "<b>🔘 Default buttons (always shown):</b>\n"
+        "  • ➕ Add me to group\n"
+        "  • 📤 Share bot\n"
+        "  • 👤 Author\n\n"
+        "<b>➕ Custom buttons:</b>"
+    ]
+    for i, btn in enumerate(buttons, 1):
+        lines.append(f"  {i}. {btn['text']} — <code>{btn['url']}</code>")
+
+    lines.append("\n<i>Remove: /removebutton &lt;number&gt;  |  Reset all: /resetbuttons</i>")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+async def cmd_removebutton(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Remove a custom inline button by number (admin only).
+
+    Usage:  /removebutton 2
+    """
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ Not authorised.")
+        return
+
+    if not context.args or not context.args[0].isdigit():
+        await update.message.reply_text(
+            "Usage: <code>/removebutton &lt;number&gt;</code>\n"
+            "See the list with /listbuttons",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    index = int(context.args[0])
+    db = db_module.get_db()
+    if db is None:
+        await update.message.reply_text("❌ Database is unavailable.")
+        return
+
+    if db_module.remove_start_button(db, index):
+        remaining = db_module.get_start_buttons(db)
+        await update.message.reply_text(
+            f"✅ Button #{index} removed. {len(remaining)} custom button(s) remaining.",
+        )
+    else:
+        buttons = db_module.get_start_buttons(db)
+        await update.message.reply_text(
+            f"❌ Invalid number. You have {len(buttons)} custom button(s). "
+            "Use /listbuttons to see them."
+        )
+
+
+async def cmd_resetbuttons(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Remove ALL custom inline buttons (admin only)."""
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ Not authorised.")
+        return
+
+    db = db_module.get_db()
+    if db is None:
+        await update.message.reply_text("❌ Database is unavailable.")
+        return
+
+    if db_module.reset_start_buttons(db):
+        await update.message.reply_text(
+            "✅ All custom buttons removed.\n"
+            "Only the 3 default buttons (Add to group, Share, Author) will now show."
+        )
+    else:
+        await update.message.reply_text("❌ Failed to reset buttons.")
+
+
 async def cmd_resetmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user or user.id not in ADMIN_IDS:
@@ -553,9 +744,14 @@ async def run_bot():
     application.add_handler(CommandHandler("start", cmd_start))
 
     # Admin commands (private chat only)
-    application.add_handler(CommandHandler("setmsg",    cmd_setmsg,    filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("getmsg",    cmd_getmsg,    filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("resetmsg",  cmd_resetmsg,  filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("setmsg",       cmd_setmsg,       filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("getmsg",       cmd_getmsg,       filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("resetmsg",     cmd_resetmsg,     filters=filters.ChatType.PRIVATE))
+    # /start button management
+    application.add_handler(CommandHandler("addbutton",    cmd_addbutton,    filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("listbuttons",  cmd_listbuttons,  filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("removebutton", cmd_removebutton, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("resetbuttons", cmd_resetbuttons, filters=filters.ChatType.PRIVATE))
     # /setemoji — 2-step conversation (private only)
     setemoji_conv = ConversationHandler(
         entry_points=[CommandHandler("setemoji", cmd_setemoji, filters=filters.ChatType.PRIVATE)],

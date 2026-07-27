@@ -286,3 +286,62 @@ def reset_field_emoji(db, field: str) -> bool:
     except Exception as exc:
         logger.error("Failed to reset emoji for %s: %s", field, exc)
         return False
+
+
+# ---------------------------------------------------------------------------
+# Start inline-button settings
+# ---------------------------------------------------------------------------
+
+def get_start_buttons(db) -> list:
+    """Return list of custom start buttons: [{"text": str, "url": str}, ...]"""
+    coll = _settings(db)
+    doc = coll.find_one({"_id": "start_buttons"})
+    if doc and isinstance(doc.get("buttons"), list):
+        return doc["buttons"]
+    return []
+
+
+def add_start_button(db, text: str, url: str) -> bool:
+    """Append a new button to the custom start-button list."""
+    coll = _settings(db)
+    try:
+        coll.update_one(
+            {"_id": "start_buttons"},
+            {"$push": {"buttons": {"text": text, "url": url}}},
+            upsert=True,
+        )
+        return True
+    except Exception as exc:
+        logger.error("Failed to add start button: %s", exc)
+        return False
+
+
+def remove_start_button(db, index: int) -> bool:
+    """Remove button at 1-based index. Returns False if out of range."""
+    buttons = get_start_buttons(db)
+    idx = index - 1
+    if idx < 0 or idx >= len(buttons):
+        return False
+    buttons.pop(idx)
+    coll = _settings(db)
+    try:
+        coll.update_one(
+            {"_id": "start_buttons"},
+            {"$set": {"buttons": buttons}},
+            upsert=True,
+        )
+        return True
+    except Exception as exc:
+        logger.error("Failed to remove start button: %s", exc)
+        return False
+
+
+def reset_start_buttons(db) -> bool:
+    """Remove all custom start buttons (revert to defaults only)."""
+    coll = _settings(db)
+    try:
+        coll.delete_one({"_id": "start_buttons"})
+        return True
+    except Exception as exc:
+        logger.error("Failed to reset start buttons: %s", exc)
+        return False
