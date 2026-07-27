@@ -29,6 +29,7 @@ from telegram import Update, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKe
 from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     ConversationHandler,
     ContextTypes,
@@ -171,8 +172,40 @@ def format_duplicate_reply(
 # /start
 # ---------------------------------------------------------------------------
 
-def _build_start_keyboard(bot_username: str, custom_buttons: list) -> InlineKeyboardMarkup:
-    """Build the /start inline keyboard: 3 default buttons + any custom buttons."""
+OWNER_PANEL_CALLBACK = "owner_panel"
+
+OWNER_PANEL_TEXT = (
+    "⚙️ <b>Owner Panel — Commands</b>\n\n"
+    "━━━━━━━━━━━━━━━━━━\n"
+    "📝 <b>Messages</b>\n"
+    "  /setmsg dup <code>&lt;msg&gt;</code> — duplicate warning set\n"
+    "  /setmsg welcome <code>&lt;msg&gt;</code> — /start welcome set\n"
+    "  /getmsg — messages ကြည့်\n"
+    "  /resetmsg dup|welcome — default ပြန်ပြင်\n\n"
+    "🎭 <b>Animated Emoji</b>\n"
+    "  /setemoji <code>&lt;field&gt;</code> — emoji set\n"
+    "    fields: <code>phone</code> | <code>whatsapp</code> | <code>id</code> | <code>username</code>\n"
+    "  /getemoji — emoji settings ကြည့်\n"
+    "  /resetemoji <code>&lt;field&gt;</code> — default ပြန်ပြင်\n\n"
+    "🔘 <b>Start Buttons</b>\n"
+    "  /addbutton <code>&lt;label&gt; | &lt;url&gt;</code> — button ထည့်\n"
+    "  /listbuttons — buttons ကြည့်\n"
+    "  /removebutton <code>&lt;n&gt;</code> — button ဖျက်\n"
+    "  /resetbuttons — buttons အားလုံး ဖျက်\n"
+    "━━━━━━━━━━━━━━━━━━"
+)
+
+
+def _build_start_keyboard(
+    bot_username: str,
+    custom_buttons: list,
+    is_owner: bool = False,
+) -> InlineKeyboardMarkup:
+    """Build the /start inline keyboard.
+
+    Always shows 3 default buttons + any custom buttons.
+    Adds a hidden ⚙️ Owner Panel button at the bottom for admins only.
+    """
     add_url   = f"https://t.me/{bot_username}?startgroup=start"
     share_url = f"https://t.me/share/url?url=https://t.me/{bot_username}"
     author_url = "https://t.me/yasha_sangi"
@@ -190,6 +223,12 @@ def _build_start_keyboard(bot_username: str, custom_buttons: list) -> InlineKeyb
     # Append custom buttons — one per row
     for btn in custom_buttons:
         keyboard.append([InlineKeyboardButton(btn["text"], url=btn["url"])])
+
+    # Owner-only row — invisible to regular users
+    if is_owner:
+        keyboard.append([
+            InlineKeyboardButton("⚙️ Owner Panel", callback_data=OWNER_PANEL_CALLBACK),
+        ])
 
     return InlineKeyboardMarkup(keyboard)
 
@@ -219,12 +258,30 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         custom_buttons = []
 
     bot_username = context.bot.username or ""
-    keyboard = _build_start_keyboard(bot_username, custom_buttons)
+    is_owner = user.id in ADMIN_IDS
+    keyboard = _build_start_keyboard(bot_username, custom_buttons, is_owner=is_owner)
     await update.message.reply_text(
         text,
         parse_mode=ParseMode.HTML,
         reply_markup=keyboard,
     )
+
+
+# ---------------------------------------------------------------------------
+# Owner Panel callback
+# ---------------------------------------------------------------------------
+
+async def handle_owner_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle the ⚙️ Owner Panel inline button — only responds to admins."""
+    query = update.callback_query
+    if not query:
+        return
+    user = query.from_user
+    if not user or user.id not in ADMIN_IDS:
+        await query.answer("⛔ Not authorised.", show_alert=True)
+        return
+    await query.answer()
+    await query.message.reply_text(OWNER_PANEL_TEXT, parse_mode=ParseMode.HTML)
 
 
 # ---------------------------------------------------------------------------
@@ -752,6 +809,8 @@ async def run_bot():
     application.add_handler(CommandHandler("listbuttons",  cmd_listbuttons,  filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("removebutton", cmd_removebutton, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("resetbuttons", cmd_resetbuttons, filters=filters.ChatType.PRIVATE))
+    # Owner Panel callback
+    application.add_handler(CallbackQueryHandler(handle_owner_panel, pattern=f"^{OWNER_PANEL_CALLBACK}$"))
     # /setemoji — 2-step conversation (private only)
     setemoji_conv = ConversationHandler(
         entry_points=[CommandHandler("setemoji", cmd_setemoji, filters=filters.ChatType.PRIVATE)],
