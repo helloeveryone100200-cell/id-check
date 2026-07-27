@@ -223,3 +223,66 @@ def reset_setting(db, key: str) -> bool:
     except Exception as exc:
         logger.error("Failed to reset %s: %s", key, exc)
         return False
+
+
+# ---------------------------------------------------------------------------
+# Field animated-emoji settings
+# ---------------------------------------------------------------------------
+
+# Short alias → internal field name
+FIELD_ALIASES = {
+    "phone":    "phone_number",
+    "whatsapp": "whatsapp_number",
+    "id":       "id_number",
+    "username": "username",
+}
+
+# Default plain emojis used when no custom animated emoji is configured
+FIELD_EMOJI_DEFAULTS: dict[str, dict] = {
+    "phone_number":    {"fallback": "📞", "emoji_id": None},
+    "whatsapp_number": {"fallback": "💬", "emoji_id": None},
+    "id_number":       {"fallback": "🪪", "emoji_id": None},
+    "username":        {"fallback": "👤", "emoji_id": None},
+}
+
+
+def get_field_emojis(db) -> dict:
+    """Return {field_name: {fallback, emoji_id}} for all four fields."""
+    coll = _settings(db)
+    result = {}
+    for field, default in FIELD_EMOJI_DEFAULTS.items():
+        doc = coll.find_one({"_id": f"emoji_{field}"})
+        if doc:
+            result[field] = {
+                "fallback": doc.get("fallback", default["fallback"]),
+                "emoji_id": doc.get("emoji_id"),
+            }
+        else:
+            result[field] = default.copy()
+    return result
+
+
+def set_field_emoji(db, field: str, emoji_id: str, fallback: str) -> bool:
+    """Save an animated emoji ID + fallback for one field."""
+    coll = _settings(db)
+    try:
+        coll.update_one(
+            {"_id": f"emoji_{field}"},
+            {"$set": {"emoji_id": emoji_id, "fallback": fallback}},
+            upsert=True,
+        )
+        return True
+    except Exception as exc:
+        logger.error("Failed to set emoji for %s: %s", field, exc)
+        return False
+
+
+def reset_field_emoji(db, field: str) -> bool:
+    """Remove custom emoji for a field so the default plain emoji is used."""
+    coll = _settings(db)
+    try:
+        coll.delete_one({"_id": f"emoji_{field}"})
+        return True
+    except Exception as exc:
+        logger.error("Failed to reset emoji for %s: %s", field, exc)
+        return False

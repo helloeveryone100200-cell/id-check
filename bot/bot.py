@@ -115,19 +115,45 @@ def user_html_mention(user) -> str:
     return f'<a href="tg://user?id={user.id}">{name}</a>'
 
 
-def format_duplicate_reply(template: str, user_mention: str, original_user: str, matches: list) -> str:
-    field_labels = {
-        "phone_number":   "📞 Phone number",
-        "whatsapp_number": "💬 WhatsApp number",
-        "id_number":      "🪪 ID",
-        "username":       "👤 Username",
-    }
-    lines = [
-        f"  • {field_labels.get(m['field'], m['field'])}: <code>{m['value']}</code>"
-        for m in matches
-    ]
+FIELD_NAMES = {
+    "phone_number":    "Phone number",
+    "whatsapp_number": "WhatsApp number",
+    "id_number":       "ID",
+    "username":        "Username",
+}
+
+
+def _emoji_tag(cfg: dict) -> str:
+    """Return a <tg-emoji> tag if an emoji_id is set, otherwise return the plain fallback."""
+    emoji_id = cfg.get("emoji_id")
+    fallback = cfg.get("fallback", "•")
+    if emoji_id:
+        return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
+    return fallback
+
+
+def format_duplicate_reply(
+    template: str,
+    user_mention: str,
+    original_user: str,
+    matches: list,
+    field_emojis: dict | None = None,
+) -> str:
+    if field_emojis is None:
+        field_emojis = {}
+
+    lines = []
+    for m in matches:
+        field = m["field"]
+        name = FIELD_NAMES.get(field, field)
+        cfg = field_emojis.get(field, {"fallback": "•", "emoji_id": None})
+        emoji = _emoji_tag(cfg)
+        lines.append(f"  {emoji} {name}: <code>{m['value']}</code>")
+
     matched_fields = "\n".join(lines)
-    first_field = field_labels.get(matches[0]["field"], matches[0]["field"]) if matches else ""
+    first_cfg = field_emojis.get(matches[0]["field"], {}) if matches else {}
+    first_field = f"{_emoji_tag(first_cfg)} {FIELD_NAMES.get(matches[0]['field'], '')}".strip() if matches else ""
+
     return (
         template
         .replace("{user_mention}", user_mention)
@@ -241,6 +267,132 @@ async def cmd_setmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text("❌ Failed to update the message.")
 
 
+async def cmd_setemoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Set an animated emoji for a duplicate-message field.
+
+    Usage:
+      /setemoji <field> <emoji_id> <fallback_emoji>
+
+    Fields:  phone | whatsapp | id | username
+    Example: /setemoji phone 5368324170671202286 📞
+             /setemoji id    5368324170671202286 🪪
+
+    Find emoji_id: forward any custom emoji to @RawDataBot and read
+    the `custom_emoji_id` value from its reply.
+    """
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ Not authorised.")
+        return
+
+    HELP = (
+        "Usage: <code>/setemoji &lt;field&gt; &lt;emoji_id&gt; &lt;fallback&gt;</code>\n\n"
+        "Fields: <code>phone</code> | <code>whatsapp</code> | <code>id</code> | <code>username</code>\n\n"
+        "Example:\n"
+        "<code>/setemoji phone 5368324170671202286 📞</code>\n\n"
+        "💡 To find an emoji_id: forward any custom animated emoji to "
+        "@RawDataBot and copy the <code>custom_emoji_id</code> value."
+    )
+
+    args = (context.args or [])
+    if len(args) < 3:
+        await update.message.reply_text(HELP, parse_mode=ParseMode.HTML)
+        return
+
+    alias, emoji_id, fallback = args[0].lower(), args[1], args[2]
+    field = db_module.FIELD_ALIASES.get(alias)
+    if not field:
+        await update.message.reply_text(
+            f"❌ Unknown field <code>{alias}</code>.\n"
+            "Use: <code>phone</code> | <code>whatsapp</code> | <code>id</code> | <code>username</code>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if not emoji_id.isdigit():
+        await update.message.reply_text("❌ emoji_id must be a number.\n" + HELP, parse_mode=ParseMode.HTML)
+        return
+
+    db = db_module.get_db()
+    if db is None:
+        await update.message.reply_text("❌ Database is unavailable.")
+        return
+
+    if db_module.set_field_emoji(db, field, emoji_id, fallback):
+        preview = f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
+        await update.message.reply_text(
+            f"✅ Emoji for <b>{alias}</b> updated!\n\nPreview: {preview} {FIELD_NAMES.get(field, field)}",
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        await update.message.reply_text("❌ Failed to save. Please try again.")
+
+
+async def cmd_getemoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show current animated emoji settings for all fields."""
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ Not authorised.")
+        return
+
+    db = db_module.get_db()
+    if db is None:
+        await update.message.reply_text("❌ Database is unavailable.")
+        return
+
+    emojis = db_module.get_field_emojis(db)
+    lines = []
+    for alias, field in db_module.FIELD_ALIASES.items():
+        cfg = emojis.get(field, {})
+        emoji_id = cfg.get("emoji_id")
+        fallback = cfg.get("fallback", "•")
+        if emoji_id:
+            tag = f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
+            lines.append(f"• <code>{alias}</code>: {tag}  (id: <code>{emoji_id}</code>)")
+        else:
+            lines.append(f"• <code>{alias}</code>: {fallback}  <i>(plain, no animation)</i>")
+
+    text = (
+        "🎭 <b>Animated emoji settings:</b>\n\n"
+        + "\n".join(lines)
+        + "\n\n<i>Change with: /setemoji &lt;field&gt; &lt;emoji_id&gt; &lt;fallback&gt;</i>\n"
+        "<i>Reset with: /resetemoji &lt;field&gt;</i>"
+    )
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+async def cmd_resetemoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Reset animated emoji for a field back to the plain default."""
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ Not authorised.")
+        return
+
+    HELP = "Usage: <code>/resetemoji &lt;field&gt;</code>\nFields: phone | whatsapp | id | username"
+
+    if not context.args:
+        await update.message.reply_text(HELP, parse_mode=ParseMode.HTML)
+        return
+
+    alias = context.args[0].lower()
+    field = db_module.FIELD_ALIASES.get(alias)
+    if not field:
+        await update.message.reply_text(
+            f"❌ Unknown field <code>{alias}</code>.", parse_mode=ParseMode.HTML
+        )
+        return
+
+    db = db_module.get_db()
+    if db is None:
+        await update.message.reply_text("❌ Database is unavailable.")
+        return
+
+    if db_module.reset_field_emoji(db, field):
+        await update.message.reply_text(f"✅ Emoji for <b>{alias}</b> reset to default.", parse_mode=ParseMode.HTML)
+    else:
+        await update.message.reply_text("❌ Failed to reset.")
+
+
 async def cmd_resetmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user or user.id not in ADMIN_IDS:
@@ -310,11 +462,13 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         original_user = original_doc.get("telegram_username") or str(original_doc.get("telegram_id", "unknown"))
         matches = result["matches"]
         template = db_module.get_duplicate_msg(db)
+        field_emojis = db_module.get_field_emojis(db)
         reply_text = format_duplicate_reply(
             template,
             user_mention=sender_mention,
             original_user=original_user,
             matches=matches,
+            field_emojis=field_emojis,
         )
         await message.reply_text(reply_text, parse_mode=ParseMode.HTML, reply_markup=ReplyKeyboardRemove())
         logger.info(
@@ -364,9 +518,12 @@ async def run_bot():
     application.add_handler(CommandHandler("start", cmd_start))
 
     # Admin commands (private chat only)
-    application.add_handler(CommandHandler("setmsg",   cmd_setmsg,   filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("getmsg",   cmd_getmsg,   filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("resetmsg", cmd_resetmsg, filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("setmsg",    cmd_setmsg,    filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("getmsg",    cmd_getmsg,    filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("resetmsg",  cmd_resetmsg,  filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("setemoji",  cmd_setemoji,  filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("getemoji",  cmd_getemoji,  filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("resetemoji",cmd_resetemoji,filters=filters.ChatType.PRIVATE))
 
     # Group ID-check listener
     application.add_handler(
