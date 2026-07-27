@@ -25,7 +25,7 @@ try:
 except ImportError:
     pass
 
-from telegram import Update
+from telegram import Update, ReplyKeyboardRemove
 from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder,
@@ -68,10 +68,10 @@ if not BOT_TOKEN:
 # Regex patterns for form parsing
 # ---------------------------------------------------------------------------
 
-RE_USERNAME = re.compile(r".*username\s*-\s*(.+)$", re.IGNORECASE | re.MULTILINE)
-RE_PHONE    = re.compile(r".*(?:client|phone)\s*number\s*-\s*(.+)$", re.IGNORECASE | re.MULTILINE)
-RE_WHATSAPP = re.compile(r".*whatsapp\s*number\s*-\s*(.+)$", re.IGNORECASE | re.MULTILINE)
-RE_ID       = re.compile(r".*\bid\b\s*-\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+RE_USERNAME = re.compile(r".*username\s*[-:]\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+RE_PHONE    = re.compile(r".*(?:client|phone)\s*number\s*[-:]\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+RE_WHATSAPP = re.compile(r".*whatsapp\s*number\s*[-:]\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+RE_ID       = re.compile(r".*\bid\b\s*[-:]\s*(.+)$", re.IGNORECASE | re.MULTILINE)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -162,7 +162,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "<code>ID - A123456</code> (optional)\n"
             "<code>Username - @yourname</code> (optional)"
         )
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=ReplyKeyboardRemove())
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +316,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             original_user=original_user,
             matches=matches,
         )
-        await message.reply_text(reply_text, parse_mode=ParseMode.HTML)
+        await message.reply_text(reply_text, parse_mode=ParseMode.HTML, reply_markup=ReplyKeyboardRemove())
         logger.info(
             "Duplicate detected for %s (fields: %s)",
             sender_display,
