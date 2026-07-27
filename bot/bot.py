@@ -539,10 +539,10 @@ async def cmd_addbutton(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "You can paste an animated emoji directly into the label."
     )
 
-    # Use text_html so animated emoji pasted in the label are preserved as-is
-    raw_html = update.message.text_html or ""
+    # Use plain text so animated emoji appear as their Unicode character in the button label
+    raw = update.message.text or ""
     # Strip the command prefix (/addbutton ), keep the rest
-    body = re.sub(r"^/\S+\s*", "", raw_html, count=1).strip()
+    body = re.sub(r"^/\S+\s*", "", raw, count=1).strip()
 
     if "|" not in body:
         await update.message.reply_text(HELP, parse_mode=ParseMode.HTML)
