@@ -1,261 +1,157 @@
 ---
 name: id-check codebase overview
-description: Full breakdown of the id-check GitHub repo — structure, every file's role, data flow, and how parts connect.
+description: Full breakdown of the id-check GitHub repo — Telegram bot with duplicate check system + MongoDB + Flask keep-alive + pnpm monorepo scaffold.
 ---
 
 # id-check Codebase — Complete Reference
 
 ## Repo Purpose
-This is a **Replit pnpm monorepo template** — a starter/scaffold project. Currently it has NO actual application logic for "ID checking". It is a clean foundation with:
-- An Express API server (backend)
-- A mockup/design sandbox (frontend design preview tool)
-- Shared libraries (DB, API contracts, client hooks)
+A **Telegram bot** that monitors group messages and flags duplicate submissions (phone number, WhatsApp, ID, username).
+Built on top of a Replit pnpm monorepo scaffold.
 
 ---
 
-## Top-Level Structure
+## Core: bot/ folder (Python)
+
+### bot/bot.py — Main Bot (861 lines)
+
+**Tech stack:** python-telegram-bot, Flask (keep-alive), asyncio
+
+**Env vars required:**
+- `BOT_TOKEN` — Telegram Bot API token
+- `ADMIN_IDS` — comma-separated Telegram user IDs with admin access
+- `MONGO_URI` — MongoDB connection string
+- `PORT` — port for Flask keep-alive server (default: 8080)
+
+**Startup flow:**
+1. Flask keep-alive server starts in a background thread (responds GET / → "OK")
+2. Telegram bot starts polling via asyncio
+
+**Form parsing — parse_submission(text):**
+Parses text/caption messages using 4 regex patterns:
+- `RE_USERNAME` → `username - value`
+- `RE_PHONE` → `client number - value` OR `phone number - value`
+- `RE_WHATSAPP` → `whatsapp number - value`
+- `RE_ID` → `id - value`
+Only triggers if `phone_number` is found (required field). Returns None otherwise.
+
+**Group message handler — handle_group_message:**
+1. Parses the message
+2. Calls check_duplicate() in DB
+3. If duplicate found → reply with formatted warning
+4. If not duplicate → save to MongoDB
+
+**Duplicate reply format — format_duplicate_reply:**
+Template placeholders: `{user_mention}`, `{original_user}`, `{matched_fields}`, `{matched_field}`
+Each match shows field emoji + field name + value in `<code>` tags (HTML parse mode).
+Animated emoji supported via `<tg-emoji emoji-id="...">fallback</tg-emoji>` tags.
+
+**Commands registered:**
+- `/start` — welcome message with inline keyboard
+- `/setmsg dup|welcome <msg>` — set duplicate or welcome message (admin, private)
+- `/getmsg` — show current messages (admin, private)
+- `/resetmsg dup|welcome` — reset to default (admin, private)
+- `/setemoji <field>` — 2-step conversation to set animated emoji (admin, private)
+- `/getemoji` — show emoji settings (admin, private)
+- `/resetemoji <field>` — reset emoji to default (admin, private)
+- `/addbutton Label | URL` — add custom start button (admin, private)
+- `/listbuttons` — list buttons (admin, private)
+- `/removebutton <n>` — remove button (admin, private)
+- `/resetbuttons` — remove all custom buttons (admin, private)
+- Owner Panel inline button → shows command list (admin callback only)
+
+**Start keyboard:**
+Always shows 3 default buttons: "Add me to group", "Share bot", "Author (https://t.me/yasha_sangi)"
++ any custom buttons from DB
++ "Owner Panel" button visible only to ADMIN_IDS users
+
+---
+
+### bot/database.py — MongoDB Helpers (347 lines)
+
+**Connection:** lazy singleton via get_db()
+- Uses `MONGO_URI` env var
+- DB name from `MONGO_DB_NAME` env var (default: "telegram_bot")
+- 5 second connection timeout
+- Returns None if unavailable (graceful degradation)
+
+**Collections:**
+1. `submissions` — stores every non-duplicate submission
+2. `settings` — stores customizable messages, emoji configs, start buttons
+
+**submissions collection indexes:**
+- `idx_phone` — phone_number ASC
+- `idx_whatsapp` — whatsapp_number ASC (sparse)
+- `idx_id` — id_number ASC (sparse)
+- `idx_username` — username ASC (sparse)
+- `idx_created_at` — created_at ASC
+
+**Duplicate check — check_duplicate():**
+Normalizes phone/whatsapp (strips spaces, dashes, dots, parens).
+Normalizes id/username (strip + lowercase).
+Queries each field separately, collects ALL matching fields.
+Returns: `{ found: bool, doc: first_matching_doc, matches: [{field, value}, ...] }`
+
+**save_submission():** Inserts normalized doc with telegram_id, telegram_username, username, phone_number, whatsapp_number, id_number, created_at (UTC).
+
+**settings collection — key/value store:**
+- `duplicate_msg` — custom duplicate warning template
+- `start_msg` — custom /start welcome template
+- `emoji_<field>` — per-field animated emoji config `{emoji_id, fallback}`
+- `start_buttons` — list of `{text, url}` custom inline buttons
+
+**Default duplicate message:**
+`{user_mention} ⚠️ Duplicate detected!\n\n{matched_fields}\n\nOriginally submitted by: {original_user}`
+
+**Default field emojis:** 📞 phone, 💬 whatsapp, 🪪 id, 👤 username
+
+---
+
+## Scaffold: monorepo (TypeScript/Node.js)
+
+Mostly unused template scaffold. Key parts:
+
+### artifacts/api-server — Express 5 backend
+- Only endpoint: GET /api/healthz → { status: "ok" }
+- Port from PORT env var
+- Logger: pino (pretty in dev, JSON in prod)
+- Build: esbuild → dist/index.mjs
+
+### artifacts/mockup-sandbox — Design preview tool
+- Vite+React server for Replit Canvas iframe previews
+- shadcn/ui component library pre-installed
+- NOT a user-facing app
+
+### lib/api-spec — OpenAPI contract + Orval codegen
+- Only defines /healthz endpoint
+- Codegen: `pnpm --filter @workspace/api-spec run codegen`
+
+### lib/db — Drizzle ORM + PostgreSQL
+- Schema is empty (no tables)
+- DATABASE_URL env required
+
+---
+
+## Data flow (bot)
 
 ```
-/
-├── artifacts/          # Runnable apps (deployed services)
-│   ├── api-server/     # Express 5 backend API
-│   └── mockup-sandbox/ # React+Vite design preview tool
-├── lib/                # Shared libraries (not deployed directly)
-│   ├── api-spec/       # OpenAPI spec + codegen config (source of truth)
-│   ├── api-client-react/ # Generated React Query hooks for frontend
-│   ├── api-zod/        # Generated Zod validators for backend
-│   └── db/             # PostgreSQL + Drizzle ORM setup
-├── scripts/            # Utility scripts (post-merge hook)
-├── pnpm-workspace.yaml # Workspace config, package catalog, platform overrides
-├── tsconfig.base.json  # Shared strict TypeScript config
-├── tsconfig.json       # Root solution file (references lib/* only)
-└── .replit             # Replit platform config (Node 24, autoscale deploy)
-```
-
----
-
-## artifacts/api-server — Express Backend
-
-### Entry flow
-1. `src/index.ts` — reads `PORT` env var (throws if missing/invalid), calls `app.listen(port)`
-2. `src/app.ts` — creates Express app, adds middleware stack, mounts router at `/api`
-3. `src/routes/index.ts` — root router, mounts `healthRouter`
-4. `src/routes/health.ts` — `GET /api/healthz` → returns `{ status: "ok" }` (validated via Zod `HealthCheckResponse`)
-
-### Middleware stack (in order)
-- `pino-http` — structured HTTP request/response logging (logs method, url without query, statusCode)
-- `cors()` — allows all origins
-- `express.json()` — parse JSON bodies
-- `express.urlencoded({ extended: true })` — parse form bodies
-
-### Logging (src/lib/logger.ts)
-- Uses `pino` logger
-- Dev: pretty-prints with color (`pino-pretty`)
-- Production: raw JSON
-- Redacts: `authorization` header, `cookie` header, `set-cookie` header
-- Log level from `LOG_LEVEL` env var (default: "info")
-
-### Build (build.mjs)
-- Uses `esbuild` to bundle `src/index.ts` → `dist/index.mjs` (ESM format)
-- Plugin: `esbuild-plugin-pino` handles pino's worker thread logging correctly
-- Banner injected: shims `require`, `__filename`, `__dirname` for CJS-only packages (like express) in ESM output
-- Large list of `external` packages that cannot be bundled (native modules, heavy deps)
-- Source maps: linked
-
-### Deployment (artifact.toml)
-- Kind: `api`, serves at path `/api`, local port `8080`
-- Dev: `pnpm --filter @workspace/api-server run dev` (build then start)
-- Production build: esbuild bundle with `NODE_ENV=production`
-- Production run: `node --enable-source-maps artifacts/api-server/dist/index.mjs`
-- Health check: `GET /api/healthz`
-
-### Dependencies
-- Runtime: express 5, cors, pino, pino-http, cookie-parser, drizzle-orm
-- Workspace deps: `@workspace/api-zod`, `@workspace/db`
-
----
-
-## artifacts/mockup-sandbox — Design Preview Tool
-
-### Purpose
-Standalone Vite+React server used by Replit Canvas to render individual UI components in iframes. NOT a user-facing app.
-
-### How it works (App.tsx)
-- URL routing: `/<basePath>/preview/<ComponentName>` → renders that component in isolation
-- URL routing: any other path → shows "Component Preview Server" gallery page
-- Components live at `src/components/mockups/<name>.tsx`
-- Auto-discovers all mockup components via `.generated/mockup-components` (generated by `mockupPreviewPlugin`)
-- Resolves component from module: tries `default`, then `Preview`, then named export matching filename, then last exported function
-
-### Vite config (vite.config.ts)
-- Requires `PORT` and `BASE_PATH` env vars (throws if missing)
-- Base path set from `BASE_PATH` env
-- Plugins: mockupPreviewPlugin, React, Tailwind CSS v4, Replit runtime error modal, Replit cartographer (dev only)
-- Host: `0.0.0.0`, `allowedHosts: true` (required for Replit proxy)
-- Path alias: `@` → `src/`
-
-### UI components (src/components/ui/)
-Full shadcn/ui component library pre-installed:
-accordion, alert, alert-dialog, aspect-ratio, avatar, badge, breadcrumb, button, button-group, calendar, card, carousel, chart, checkbox, collapsible, command, context-menu, dialog, drawer, dropdown-menu, empty, field, form, hover-card, input, input-group, input-otp, item, kbd, label, menubar, navigation-menu, pagination, popover, progress, radio-group, resizable, scroll-area, select, separator, sheet, sidebar, skeleton, slider, sonner, spinner, switch, table, tabs, textarea, toast, toaster, toggle, toggle-group, tooltip
-
----
-
-## lib/api-spec — Contract Source of Truth
-
-### openapi.yaml
-Currently only defines ONE endpoint:
-```
-GET /healthz → HealthStatus { status: string }
-```
-Note: `info.title` must stay "Api" — changing it breaks generated import paths.
-
-### orval.config.ts — Codegen config
-Runs `orval` to generate two outputs from the same `openapi.yaml`:
-1. **api-client-react** output → `lib/api-client-react/src/generated/`
-   - Mode: `react-query` (TanStack React Query hooks)
-   - Custom fetch mutator: uses `customFetch` from `custom-fetch.ts`
-   - Base URL: `/api`
-2. **zod** output → `lib/api-zod/src/generated/`
-   - Mode: `zod` (Zod validators)
-   - Coerces query/param types, uses Date and BigInt
-
-### Codegen command
-```
-pnpm --filter @workspace/api-spec run codegen
-```
-(runs orval then `pnpm -w run typecheck:libs`)
-
----
-
-## lib/api-client-react — Frontend API Client
-
-### custom-fetch.ts (371 lines — the heart of the client)
-Full-featured fetch wrapper:
-- `setBaseUrl(url)` — prepend base URL to all relative paths (for Expo/mobile calling remote API)
-- `setAuthTokenGetter(fn)` — register a bearer token getter (for mobile auth)
-- `customFetch<T>(input, options)` — main fetch function:
-  - Applies base URL to relative paths
-  - Merges headers (request headers + options headers)
-  - Auto-sets `Content-Type: application/json` if body looks like JSON
-  - Auto-sets `Accept: application/json` if responseType is json
-  - Injects `Authorization: Bearer <token>` if auth getter is set
-  - Throws `ApiError` on non-ok responses (with parsed error body)
-  - Throws `ResponseParseError` if JSON parsing fails
-  - Handles `auto` response type (infers json/text/blob from Content-Type)
-  - Handles no-body responses (204, 205, 304, HEAD, Content-Length: 0)
-
-### Generated files
-- `api.ts` — React Query hooks: `useHealthCheck()`, `getHealthCheckQueryKey()`, `getHealthCheckQueryOptions()`, `healthCheck()` (raw fetch)
-- `api.schemas.ts` — TypeScript interfaces: `HealthStatus { status: string }`
-
-### Exports (index.ts)
-All generated hooks + schemas + `setBaseUrl` + `setAuthTokenGetter`
-
----
-
-## lib/api-zod — Backend Validators
-
-### Generated files
-- `generated/api.ts` — `HealthCheckResponse` = `zod.object({ status: zod.string() })`
-- `generated/types/healthStatus.ts` — `HealthStatus` interface
-- `generated/types/index.ts` — re-exports all types
-
-### Used in backend
-`health.ts` does: `HealthCheckResponse.parse({ status: "ok" })` to validate before sending
-
----
-
-## lib/db — Database Layer
-
-### src/index.ts
-- Creates `pg.Pool` from `DATABASE_URL` env var (throws if missing)
-- Creates `drizzle(pool, { schema })` instance
-- Exports: `pool`, `db`, and all schema exports
-
-### src/schema/index.ts
-Currently **empty** (no tables defined yet). Has commented-out example showing how to add a table with Drizzle + drizzle-zod.
-
-### drizzle.config.ts
-- Dialect: PostgreSQL
-- Schema: `./src/schema/index.ts`
-- Used by `drizzle-kit push` for migrations
-
-### Dependencies
-- drizzle-orm, drizzle-zod, pg, zod
-
----
-
-## pnpm-workspace.yaml — Workspace Config
-
-### Key settings
-- `minimumReleaseAge: 1440` — packages must be 1 day old before install (supply-chain attack defense)
-- Excludes `@replit/*` and `stripe-replit-sync` from the age check
-- Package catalog pins exact versions for shared deps (react 19.1.0, vite 7.x, tailwindcss 4.x, etc.)
-- Platform overrides: strips all non-linux-x64 esbuild/rollup/lightningcss/tailwind binaries
-- `esbuild` pinned to `0.27.3` everywhere (drizzle-kit vuln fix)
-- `@esbuild-kit/esm-loader` → replaced with `tsx` (security override)
-
----
-
-## TypeScript Config
-
-### tsconfig.base.json — Shared strict settings
-- Target: ES2022, module: ESNext, moduleResolution: bundler
-- Strict: noImplicitAny, noImplicitThis, strictNullChecks, strictBindCallApply, strictPropertyInitialization
-- `customConditions: ["workspace"]` — enables workspace-specific package exports
-- `skipLibCheck: true`
-
-### tsconfig.json (root) — Solution file
-References only lib packages (db, api-client-react, api-zod) for composite builds.
-Artifacts are NOT referenced here (leaf packages).
-
-### Typecheck commands
-- `pnpm run typecheck:libs` — builds composite libs with `tsc --build`
-- `pnpm run typecheck` — full check: libs + all artifact/script packages
-
----
-
-## scripts/post-merge.sh
-Runs after any task agent merge:
-1. `pnpm install --frozen-lockfile` — installs deps
-2. `pnpm --filter db push` — runs Drizzle schema push to DB
-
----
-
-## .replit — Platform Config
-- Runtime: `nodejs-24`
-- Deployment: autoscale, application router
-- Post-build: `pnpm store prune` (cleans package cache)
-- Agent: PNPM_WORKSPACE stack, expertMode
-
----
-
-## Data Flow Diagram
-
-```
-Frontend (react-vite artifact, not yet created)
-  └─ import { useHealthCheck } from "@workspace/api-client-react"
-       └─ customFetch → GET /api/healthz
-            └─ artifacts/api-server (Express)
-                 └─ health.ts router
-                      └─ HealthCheckResponse.parse() from @workspace/api-zod
-                           └─ res.json({ status: "ok" })
-
-Database (when used):
-  lib/db → drizzle(pool) → PostgreSQL (DATABASE_URL env)
-  Backend routes import { db } from "@workspace/db"
-  Schema defined in lib/db/src/schema/index.ts
-  Changes pushed with: pnpm --filter @workspace/db run push
+Telegram Group Message
+  ↓
+bot.py: handle_group_message()
+  ↓
+parse_submission(text) — regex extract phone/whatsapp/id/username
+  ↓ (if phone found)
+database.py: check_duplicate()
+  ↓ normalize all fields
+  ↓ query MongoDB submissions collection
+  ├─ DUPLICATE FOUND → format_duplicate_reply() → reply_text (HTML, pino log)
+  └─ NOT FOUND → save_submission() → insert to MongoDB
 ```
 
 ---
 
-## What Does NOT Exist Yet
+## What's missing / not yet built
 - No frontend React app (react-vite artifact)
-- No actual ID-check business logic
-- No database tables (schema/index.ts is empty)
-- No authentication
-- No application-specific API endpoints (only /healthz)
-- No middleware for auth, sessions, etc.
-
-**Why:** This is a monorepo template/scaffold. The "id-check" name in the GitHub repo is the project name, but the actual ID checking feature hasn't been built yet. The next step would be building the feature on top of this foundation.
+- No database tables in Drizzle (schema/index.ts empty — unused by bot, bot uses MongoDB)
+- No Python requirements.txt or Dockerfile in the repo
+- The Node.js Express server and bot are completely separate systems (bot uses MongoDB, Express uses PostgreSQL via Drizzle)
