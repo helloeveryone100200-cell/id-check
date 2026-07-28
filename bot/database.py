@@ -205,8 +205,8 @@ def check_and_replace_by_id(
 # ---------------------------------------------------------------------------
 
 DEFAULT_DUPLICATE_MSG = (
-    "⚠️ ဤ {id_number} ဖြင့် အကောင့်သည် {original_user} က {date} တွင်တင်ထားပါသည်။\n\n"
-    "စစ်ဆေးထားသူ အရေအတွက် - {count}"
+    "⚠️ ID <code>{id_number}</code> was already submitted by <b>{original_user}</b> on <b>{date}</b>.\n\n"
+    "🔢 Check count: {count}"
 )
 
 # Placeholders available in the duplicate message template:
