@@ -1,0 +1,1 @@
+- [id-check codebase overview](id-check-codebase.md) — full breakdown of every file, data flow, and what's not yet built in the id-check GitHub repo
