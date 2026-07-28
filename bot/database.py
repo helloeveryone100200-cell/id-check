@@ -16,9 +16,52 @@ logger = logging.getLogger(__name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
+# Matches every Unicode emoji / pictograph / variation-selector block.
+_RE_EMOJI = _re.compile(
+    "["
+    "\U0001F600-\U0001F64F"   # emoticons
+    "\U0001F300-\U0001F5FF"   # symbols & pictographs
+    "\U0001F680-\U0001F6FF"   # transport & map
+    "\U0001F1E0-\U0001F1FF"   # regional-indicator (flags)
+    "\U0001F900-\U0001F9FF"   # supplemental symbols & pictographs
+    "\U0001FA00-\U0001FA6F"   # chess / other symbols
+    "\U0001FA70-\U0001FAFF"   # food / drink / misc
+    "\U00002300-\U000023FF"   # misc technical
+    "\U00002600-\U000027BF"   # misc symbols
+    "\U0000FE00-\U0000FE0F"   # variation selectors (VS-1 … VS-16)
+    "\U0001F004"              # mahjong tile
+    "\U0001F0CF"              # joker
+    "\u200D"                  # zero-width joiner
+    "\u20E3"                  # combining enclosing keycap
+    "]+",
+    flags=_re.UNICODE,
+)
+
+
+def strip_emoji(text: str) -> str:
+    """Remove all emoji and Unicode pictographic characters from *text*."""
+    return _RE_EMOJI.sub("", text).strip()
+
+
 def normalize_phone(number: str) -> str:
-    """Strip spaces, dashes, dots so 09-123, 09 123, 09.123 all become 09123."""
-    return _re.sub(r"[\s\-\.\(\)]", "", number)
+    """Normalise a phone/WhatsApp number for storage and lookup.
+
+    Steps:
+      1. Strip all emoji (e.g. ``09🌟12345`` → ``0912345``)
+      2. Remove formatting chars: spaces, dashes, dots, parentheses
+    """
+    return _re.sub(r"[\s\-\.\(\)]", "", strip_emoji(number))
+
+
+def normalize_id(id_number: str) -> str:
+    """Normalise an ID number for storage and lookup.
+
+    Steps:
+      1. Strip all emoji
+      2. Collapse surrounding whitespace
+      3. Lowercase (IDs like ``12ABC`` == ``12abc``)
+    """
+    return strip_emoji(id_number).lower()
 
 # ---------------------------------------------------------------------------
 # Connection
@@ -94,7 +137,7 @@ def check_duplicate(
 
     norm_phone    = normalize_phone(phone_number)
     norm_whatsapp = normalize_phone(whatsapp_number) if whatsapp_number else None
-    norm_id       = id_number.strip().lower() if id_number else None
+    norm_id       = normalize_id(id_number) if id_number else None
     norm_username = username.strip().lower() if username and username.strip() else None
 
     queries = [("phone_number", {"phone_number": norm_phone}, norm_phone)]
@@ -133,17 +176,21 @@ def save_submission(
     """Save a new submission. Returns True on success."""
     coll = _submissions(db)
     now = datetime.now(timezone.utc)
-    doc = {
-        "telegram_id": telegram_id,
+    # Build doc without None/empty optional fields to save MongoDB space.
+    doc: dict = {
+        "telegram_id":       telegram_id,
         "telegram_username": telegram_username,
-        "username": username.lower() if username else "",
-        "phone_number": normalize_phone(phone_number),
-        "whatsapp_number": normalize_phone(whatsapp_number) if whatsapp_number else None,
-        "id_number": id_number.strip().lower() if id_number else None,
-        "check_count": 0,   # number of times a duplicate has been detected for this entry
-        "created_at": now,
-        "updated_at": now,
+        "phone_number":      normalize_phone(phone_number),
+        "check_count":       0,
+        "created_at":        now,
+        "updated_at":        now,
     }
+    if username:
+        doc["username"] = username.lower()
+    if whatsapp_number:
+        doc["whatsapp_number"] = normalize_phone(whatsapp_number)
+    if id_number:
+        doc["id_number"] = normalize_id(id_number)
     try:
         coll.insert_one(doc)
         return True
@@ -173,7 +220,7 @@ def check_and_replace_by_id(
     submission and call :func:`save_submission` instead.
     """
     coll = _submissions(db)
-    norm_id = id_number.strip().lower()
+    norm_id = normalize_id(id_number)
 
     existing = coll.find_one({"id_number": norm_id})
     if not existing:
