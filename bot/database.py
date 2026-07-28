@@ -205,10 +205,15 @@ def check_and_replace_by_id(
 # ---------------------------------------------------------------------------
 
 DEFAULT_DUPLICATE_MSG = (
-    "{user_mention} ⚠️ Duplicate detected!\n\n"
-    "{matched_fields}\n\n"
-    "Originally submitted by: {original_user}"
+    "⚠️ ဤ {id_number} ဖြင့် အကောင့်သည် {original_user} က {date} တွင်တင်ထားပါသည်။\n\n"
+    "စစ်ဆေးထားသူ အရေအတွက် - {count}"
 )
+
+# Placeholders available in the duplicate message template:
+#   {id_number}     — the duplicate ID number
+#   {original_user} — previous submitter (@username or display name)
+#   {date}          — date the previous record was registered (DD/MM/YY)
+#   {count}         — running total of how many times this ID was checked
 
 DEFAULT_START_MSG = (
     "👋 Welcome, {name}!\n\n"

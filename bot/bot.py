@@ -325,11 +325,15 @@ async def cmd_setmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         "Usage:\n"
         "  /setmsg dup &lt;message&gt;     — duplicate warning\n"
         "  /setmsg welcome &lt;message&gt; — /start welcome message\n\n"
-        "<b>Duplicate placeholders:</b>\n"
-        "  <code>{user_mention}</code> — user who submitted the duplicate\n"
-        "  <code>{original_user}</code> — original submitter\n"
-        "  <code>{matched_fields}</code> — all duplicate field lines\n"
-        "  <code>{matched_field}</code> — first duplicate field name\n\n"
+        "<b>Duplicate message placeholders:</b>\n"
+        "  <code>{id_number}</code>     — the duplicate ID number\n"
+        "  <code>{original_user}</code> — previous submitter (@username or name)\n"
+        "  <code>{date}</code>          — date of previous submission (DD/MM/YY)\n"
+        "  <code>{count}</code>         — how many times this ID was checked\n\n"
+        "💡 <i>Emoji တွေကို တိုက်ရိုက်ရိုက်ထည့်လို့ရပါသည်။</i>\n\n"
+        "<b>Example:</b>\n"
+        "<code>/setmsg dup ⚠️ {id_number} ကို {original_user} က {date} တင်ထားသည်။\n"
+        "🔢 စစ်ဆေးမှုအကြိမ် - {count}</code>\n\n"
         "<b>Welcome placeholder:</b>\n"
         "  <code>{name}</code> — user's display name"
     )
@@ -723,23 +727,30 @@ async def cmd_resetmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 # ---------------------------------------------------------------------------
 
 def format_id_duplicate_reply(
+    db,
     id_number: str,
     original_user: str,
     original_date,
     check_count: int,
 ) -> str:
     """
-    Build the duplicate-detection notification message.
+    Build the duplicate-detection notification message using the admin-customisable
+    template stored in the database (set via /setmsg dup).
 
-    Format:
-        ⚠️ ဤ <id_number> ဖြင့် အကောင့်သည် <original_user> က <DD/MM/YY> တွင်တင်ထားပါသည်။
-        စစ်ဆေးထားသူ အရေအတွက် - N
+    Supported placeholders in the template:
+        {id_number}     — the duplicate ID number
+        {original_user} — previous submitter (@username or display name)
+        {date}          — DD/MM/YY date when the previous record was registered
+        {count}         — running total of how many times this ID was checked
     """
     date_str = original_date.strftime("%d/%m/%y") if original_date else "?"
+    template = db_module.get_duplicate_msg(db)
     return (
-        f"⚠️ ဤ <code>{id_number}</code> ဖြင့် အကောင့်သည် "
-        f"<b>{original_user}</b> က <b>{date_str}</b> တွင်တင်ထားပါသည်။\n\n"
-        f"စစ်ဆေးထားသူ အရေအတွက် - {check_count}"
+        template
+        .replace("{id_number}",     id_number)
+        .replace("{original_user}", original_user)
+        .replace("{date}",          date_str)
+        .replace("{count}",         str(check_count))
     )
 
 
@@ -796,6 +807,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             check_count = existing.get("check_count", 0) + 1
 
             reply = format_id_duplicate_reply(
+                db=db,
                 id_number=id_number,
                 original_user=original_user,
                 original_date=original_date,
