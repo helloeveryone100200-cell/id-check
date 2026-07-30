@@ -199,101 +199,45 @@ def save_submission(
         return False
 
 
-def check_and_replace_by_id(
+def find_by_id(db, id_number: str) -> dict | None:
+    """Read-only lookup by id_number. Returns the document or None."""
+    return _submissions(db).find_one({"id_number": normalize_id(id_number)})
+
+
+def find_by_phone(db, phone_number: str) -> dict | None:
+    """Read-only lookup by phone_number. Returns the document or None."""
+    return _submissions(db).find_one({"phone_number": normalize_phone(phone_number)})
+
+
+def update_submitter(
     db,
-    id_number: str,
+    doc_id,
     new_telegram_id: int,
     new_telegram_username: str,
     new_phone_number: str,
     new_username: str,
-) -> dict | None:
-    """
-    Check whether *id_number* already exists in submissions.
-
-    If found:
-      - Return the **existing** document (so the caller can build a notification
-        showing who submitted last and on what date).
-      - Replace that document's submitter fields with the new submitter.
-      - Increment ``check_count`` by 1.
-
-    If not found: return ``None`` — caller should treat this as a first-time
-    submission and call :func:`save_submission` instead.
-    """
-    coll = _submissions(db)
-    norm_id = normalize_id(id_number)
-
-    existing = coll.find_one({"id_number": norm_id})
-    if not existing:
-        return None
-
-    now = datetime.now(timezone.utc)
-    try:
-        coll.update_one(
-            {"_id": existing["_id"]},
-            {
-                "$set": {
-                    "telegram_id":       new_telegram_id,
-                    "telegram_username": new_telegram_username,
-                    "phone_number":      normalize_phone(new_phone_number) if new_phone_number else "",
-                    "username":          new_username.lower() if new_username else "",
-                    "updated_at":        now,
-                },
-                "$inc": {"check_count": 1},
-            },
-        )
-    except Exception as exc:
-        logger.error("Failed to replace submission for id '%s': %s", id_number, exc)
-
-    return existing  # caller uses this to format the duplicate notification
-
-
-def check_and_replace_by_phone(
-    db,
-    phone_number: str,
-    new_telegram_id: int,
-    new_telegram_username: str,
-    new_username: str,
     new_id_number: str | None,
-) -> dict | None:
-    """
-    Check whether *phone_number* already exists in submissions.
-
-    If found:
-      - Return the existing document.
-      - Replace submitter fields with the new submitter.
-      - Increment ``check_count`` by 1.
-
-    If not found: return ``None``.
-    """
+) -> None:
+    """Replace submitter fields on an existing document and increment check_count."""
     coll = _submissions(db)
-    norm_phone = normalize_phone(phone_number)
-
-    existing = coll.find_one({"phone_number": norm_phone})
-    if not existing:
-        return None
-
     now = datetime.now(timezone.utc)
-    update_fields: dict = {
+    set_fields: dict = {
         "telegram_id":       new_telegram_id,
         "telegram_username": new_telegram_username,
+        "phone_number":      normalize_phone(new_phone_number) if new_phone_number else "",
         "updated_at":        now,
     }
     if new_username:
-        update_fields["username"] = new_username.lower()
+        set_fields["username"] = new_username.lower()
     if new_id_number:
-        update_fields["id_number"] = normalize_id(new_id_number)
+        set_fields["id_number"] = normalize_id(new_id_number)
     try:
         coll.update_one(
-            {"_id": existing["_id"]},
-            {
-                "$set": update_fields,
-                "$inc": {"check_count": 1},
-            },
+            {"_id": doc_id},
+            {"$set": set_fields, "$inc": {"check_count": 1}},
         )
     except Exception as exc:
-        logger.error("Failed to replace submission for phone '%s': %s", phone_number, exc)
-
-    return existing
+        logger.error("Failed to update submitter for doc %s: %s", doc_id, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -301,15 +245,18 @@ def check_and_replace_by_phone(
 # ---------------------------------------------------------------------------
 
 DEFAULT_DUPLICATE_MSG = (
-    "⚠️ ID <code>{id_number}</code> was already submitted by <b>{original_user}</b> on <b>{date}</b>.\n\n"
+    "⚠️ Duplicate submission detected!\n"
+    "{duplicate_fields}\n\n"
+    "Previously by <b>{original_user}</b> on <b>{date}</b>\n"
     "🔢 Check count: {count}"
 )
 
 # Placeholders available in the duplicate message template:
-#   {id_number}     — the duplicate ID number
-#   {original_user} — previous submitter (@username or display name)
-#   {date}          — date the previous record was registered (DD/MM/YY)
-#   {count}         — running total of how many times this ID was checked
+#   {duplicate_fields} — auto-built: shows which field(s) were duplicated
+#                        (ID only / phone only / both, with their values)
+#   {original_user}    — previous submitter (@username or display name)
+#   {date}             — date the previous record was registered (DD/MM/YY)
+#   {count}            — running total of how many times this record was checked
 
 DEFAULT_START_MSG = (
     "👋 Welcome, {name}!\n\n"
@@ -350,32 +297,12 @@ def _set_setting(db, key: str, message: str) -> bool:
         return False
 
 
-DEFAULT_DUPLICATE_PHONE_MSG = (
-    "⚠️ Phone <code>{phone_number}</code> was already submitted by <b>{original_user}</b> on <b>{date}</b>.\n\n"
-    "🔢 Check count: {count}"
-)
-
-# Placeholders available in the phone duplicate message template:
-#   {phone_number}  — the duplicate phone number
-#   {original_user} — previous submitter (@username or display name)
-#   {date}          — date the previous record was registered (DD/MM/YY)
-#   {count}         — running total of how many times this phone was checked
-
-
 def get_duplicate_msg(db) -> str:
     return _get_setting(db, "duplicate_msg", DEFAULT_DUPLICATE_MSG)
 
 
 def set_duplicate_msg(db, message: str) -> bool:
     return _set_setting(db, "duplicate_msg", message)
-
-
-def get_duplicate_phone_msg(db) -> str:
-    return _get_setting(db, "duplicate_phone_msg", DEFAULT_DUPLICATE_PHONE_MSG)
-
-
-def set_duplicate_phone_msg(db, message: str) -> bool:
-    return _set_setting(db, "duplicate_phone_msg", message)
 
 
 def get_start_msg(db) -> str:
