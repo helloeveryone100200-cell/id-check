@@ -829,7 +829,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if phone_doc is not None:
         if same_doc:
             # phone already covered by the same record — add phone line too
-            dup_lines.append(f"<code>{phone_number}</code>")
+            dup_lines.append(f"Phone: <code>{phone_number}</code>")
         else:
             # Different record matches the phone
             phone_user = (
