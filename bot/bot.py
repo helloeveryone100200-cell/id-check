@@ -824,12 +824,12 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     dup_lines: list[str] = []
 
     if id_doc is not None:
-        dup_lines.append(f"🆔 ID: <code>{id_number}</code>")
+        dup_lines.append(f"<code>{id_number}</code>")
 
     if phone_doc is not None:
         if same_doc:
             # phone already covered by the same record — add phone line too
-            dup_lines.append(f"📞 Phone: <code>{phone_number}</code>")
+            dup_lines.append(f"<code>{phone_number}</code>")
         else:
             # Different record matches the phone
             phone_user = (
