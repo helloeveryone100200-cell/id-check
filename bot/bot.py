@@ -824,7 +824,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     dup_lines: list[str] = []
 
     if id_doc is not None:
-        dup_lines.append(f"<code>{id_number}</code>")
+        dup_lines.append(f"ID: <code>{id_number}</code>")
 
     if phone_doc is not None:
         if same_doc:
@@ -837,7 +837,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 or str(phone_doc.get("telegram_id", "?"))
             )
             dup_lines.append(
-                f"📞 Phone: <code>{phone_number}</code>"
+                f"Phone: <code>{phone_number}</code>"
                 + (f" (previously: {phone_user})" if id_doc is not None else "")
             )
 
