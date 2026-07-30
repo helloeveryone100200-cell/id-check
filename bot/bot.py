@@ -907,7 +907,10 @@ async def run_bot():
     logger.info("Bot is polling for updates…")
     async with application:
         await application.start()
-        await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
+        await application.updater.start_polling(
+            allowed_updates=Update.ALL_TYPES,
+            drop_pending_updates=True,   # ignore messages queued before this boot
+        )
         await asyncio.Event().wait()
         await application.updater.stop()
         await application.stop()
