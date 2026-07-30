@@ -247,6 +247,55 @@ def check_and_replace_by_id(
     return existing  # caller uses this to format the duplicate notification
 
 
+def check_and_replace_by_phone(
+    db,
+    phone_number: str,
+    new_telegram_id: int,
+    new_telegram_username: str,
+    new_username: str,
+    new_id_number: str | None,
+) -> dict | None:
+    """
+    Check whether *phone_number* already exists in submissions.
+
+    If found:
+      - Return the existing document.
+      - Replace submitter fields with the new submitter.
+      - Increment ``check_count`` by 1.
+
+    If not found: return ``None``.
+    """
+    coll = _submissions(db)
+    norm_phone = normalize_phone(phone_number)
+
+    existing = coll.find_one({"phone_number": norm_phone})
+    if not existing:
+        return None
+
+    now = datetime.now(timezone.utc)
+    update_fields: dict = {
+        "telegram_id":       new_telegram_id,
+        "telegram_username": new_telegram_username,
+        "updated_at":        now,
+    }
+    if new_username:
+        update_fields["username"] = new_username.lower()
+    if new_id_number:
+        update_fields["id_number"] = normalize_id(new_id_number)
+    try:
+        coll.update_one(
+            {"_id": existing["_id"]},
+            {
+                "$set": update_fields,
+                "$inc": {"check_count": 1},
+            },
+        )
+    except Exception as exc:
+        logger.error("Failed to replace submission for phone '%s': %s", phone_number, exc)
+
+    return existing
+
+
 # ---------------------------------------------------------------------------
 # settings collection
 # ---------------------------------------------------------------------------
@@ -301,12 +350,32 @@ def _set_setting(db, key: str, message: str) -> bool:
         return False
 
 
+DEFAULT_DUPLICATE_PHONE_MSG = (
+    "⚠️ Phone <code>{phone_number}</code> was already submitted by <b>{original_user}</b> on <b>{date}</b>.\n\n"
+    "🔢 Check count: {count}"
+)
+
+# Placeholders available in the phone duplicate message template:
+#   {phone_number}  — the duplicate phone number
+#   {original_user} — previous submitter (@username or display name)
+#   {date}          — date the previous record was registered (DD/MM/YY)
+#   {count}         — running total of how many times this phone was checked
+
+
 def get_duplicate_msg(db) -> str:
     return _get_setting(db, "duplicate_msg", DEFAULT_DUPLICATE_MSG)
 
 
 def set_duplicate_msg(db, message: str) -> bool:
     return _set_setting(db, "duplicate_msg", message)
+
+
+def get_duplicate_phone_msg(db) -> str:
+    return _get_setting(db, "duplicate_phone_msg", DEFAULT_DUPLICATE_PHONE_MSG)
+
+
+def set_duplicate_phone_msg(db, message: str) -> bool:
+    return _set_setting(db, "duplicate_phone_msg", message)
 
 
 def get_start_msg(db) -> str:

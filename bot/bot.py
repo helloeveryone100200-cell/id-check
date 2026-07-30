@@ -323,17 +323,20 @@ async def cmd_setmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     HELP = (
         "Usage:\n"
-        "  /setmsg dup &lt;message&gt;     — duplicate warning\n"
-        "  /setmsg welcome &lt;message&gt; — /start welcome message\n\n"
-        "<b>Duplicate message placeholders:</b>\n"
+        "  /setmsg dup &lt;message&gt;      — ID duplicate warning\n"
+        "  /setmsg dupphone &lt;message&gt; — phone duplicate warning\n"
+        "  /setmsg welcome &lt;message&gt;  — /start welcome message\n\n"
+        "<b>ID duplicate placeholders:</b>\n"
         "  <code>{id_number}</code>     — the duplicate ID number\n"
-        "  <code>{original_user}</code> — previous submitter (@username or name)\n"
+        "  <code>{original_user}</code> — previous submitter\n"
         "  <code>{date}</code>          — date of previous submission (DD/MM/YY)\n"
         "  <code>{count}</code>         — how many times this ID was checked\n\n"
-        "💡 <i>Emoji တွေကို တိုက်ရိုက်ရိုက်ထည့်လို့ရပါသည်။</i>\n\n"
-        "<b>Example:</b>\n"
-        "<code>/setmsg dup ⚠️ {id_number} ကို {original_user} က {date} တင်ထားသည်။\n"
-        "🔢 စစ်ဆေးမှုအကြိမ် - {count}</code>\n\n"
+        "<b>Phone duplicate placeholders:</b>\n"
+        "  <code>{phone_number}</code>  — the duplicate phone number\n"
+        "  <code>{original_user}</code> — previous submitter\n"
+        "  <code>{date}</code>          — date of previous submission (DD/MM/YY)\n"
+        "  <code>{count}</code>         — how many times this phone was checked\n\n"
+        "💡 <i>Emoji တွေကို တိုက်ရိုက်ထည့်လို့ရပါသည်။</i>\n\n"
         "<b>Welcome placeholder:</b>\n"
         "  <code>{name}</code> — user's display name"
     )
@@ -349,7 +352,7 @@ async def cmd_setmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     full_html = update.message.text_html or plain
     new_message = re.sub(r"^/\S+\s+\S+\s*", "", full_html, count=1).strip()
 
-    if msg_type not in ("dup", "welcome"):
+    if msg_type not in ("dup", "dupphone", "welcome"):
         await update.message.reply_text(HELP, parse_mode=ParseMode.HTML)
         return
 
@@ -360,7 +363,10 @@ async def cmd_setmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     if msg_type == "dup":
         success = db_module.set_duplicate_msg(db, new_message)
-        label = "Duplicate warning message"
+        label = "ID duplicate warning message"
+    elif msg_type == "dupphone":
+        success = db_module.set_duplicate_phone_msg(db, new_message)
+        label = "Phone duplicate warning message"
     else:
         success = db_module.set_start_msg(db, new_message)
         label = "Welcome message"
@@ -698,17 +704,22 @@ async def cmd_resetmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     HELP = (
         "Usage:\n"
-        "  /resetmsg dup     — reset duplicate warning to default\n"
-        "  /resetmsg welcome — reset /start welcome to default"
+        "  /resetmsg dup      — reset ID duplicate warning to default\n"
+        "  /resetmsg dupphone — reset phone duplicate warning to default\n"
+        "  /resetmsg welcome  — reset /start welcome to default"
     )
 
-    if not context.args or context.args[0].lower() not in ("dup", "welcome"):
+    if not context.args or context.args[0].lower() not in ("dup", "dupphone", "welcome"):
         await update.message.reply_text(HELP)
         return
 
     msg_type = context.args[0].lower()
-    key = "duplicate_msg" if msg_type == "dup" else "start_msg"
-    label = "Duplicate warning message" if msg_type == "dup" else "Welcome message"
+    if msg_type == "dup":
+        key, label = "duplicate_msg", "ID duplicate warning message"
+    elif msg_type == "dupphone":
+        key, label = "duplicate_phone_msg", "Phone duplicate warning message"
+    else:
+        key, label = "start_msg", "Welcome message"
 
     db = db_module.get_db()
     if db is None:
@@ -725,6 +736,34 @@ async def cmd_resetmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 # ---------------------------------------------------------------------------
 # Group message handler (ID-check / duplicate detection)
 # ---------------------------------------------------------------------------
+
+def format_phone_duplicate_reply(
+    db,
+    phone_number: str,
+    original_user: str,
+    original_date,
+    check_count: int,
+) -> str:
+    """
+    Build the phone-duplicate notification using the admin-customisable template
+    stored in the database (set via /setmsg dupphone).
+
+    Supported placeholders:
+        {phone_number}  — the duplicate phone number
+        {original_user} — previous submitter (@username or display name)
+        {date}          — DD/MM/YY date when the previous record was registered
+        {count}         — running total of how many times this phone was checked
+    """
+    date_str = original_date.strftime("%d/%m/%y") if original_date else "?"
+    template = db_module.get_duplicate_phone_msg(db)
+    return (
+        template
+        .replace("{phone_number}",  phone_number)
+        .replace("{original_user}", original_user)
+        .replace("{date}",          date_str)
+        .replace("{count}",         str(check_count))
+    )
+
 
 def format_id_duplicate_reply(
     db,
@@ -822,6 +861,41 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 check_count,
             )
             return  # Record already updated in DB — nothing more to do.
+
+    # ── Secondary check: phone-based duplicate detection ────────────────────
+    phone_number = parsed["phone_number"]
+    existing_phone = db_module.check_and_replace_by_phone(
+        db,
+        phone_number=phone_number,
+        new_telegram_id=sender.id,
+        new_telegram_username=user_display(sender),
+        new_username=parsed.get("username", ""),
+        new_id_number=id_number,
+    )
+    if existing_phone is not None:
+        original_user = (
+            existing_phone.get("telegram_username")
+            or str(existing_phone.get("telegram_id", "?"))
+        )
+        original_date = existing_phone.get("updated_at") or existing_phone.get("created_at")
+        check_count   = existing_phone.get("check_count", 0) + 1
+
+        reply = format_phone_duplicate_reply(
+            db=db,
+            phone_number=phone_number,
+            original_user=original_user,
+            original_date=original_date,
+            check_count=check_count,
+        )
+        await message.reply_text(reply, parse_mode=ParseMode.HTML)
+        logger.info(
+            "Phone duplicate: phone=%s, previous=%s → replaced by %s (count=%d)",
+            phone_number,
+            original_user,
+            user_display(sender),
+            check_count,
+        )
+        return
 
     # ── No duplicate found → save as a new submission ───────────────────────
     saved = db_module.save_submission(
