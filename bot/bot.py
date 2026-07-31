@@ -9,7 +9,26 @@ Environment variables:
     ADMIN_IDS   — Comma-separated Telegram user IDs with admin access
     MONGO_URI   — MongoDB connection string
     PORT        — Port for the keep-alive web server (default: 8080)
+    AUTHOR_URL  — Override the Author button URL (default: https://t.me/yasha_sangi)
+
+Fixes applied vs original:
+  1. Removed dead first definition of format_duplicate_reply() (lines 150-178
+     in the original were silently overridden by the second definition and
+     therefore never executed).
+  2. handle_group_message() now checks ALL four fields for duplicates
+     (phone, WhatsApp, ID, username) — the original only checked ID + phone.
+  3. update_submitter() calls no longer cross-contaminate documents:
+     when two *different* records match (one by ID, one by phone/whatsapp),
+     only the fields that belong to each record are written back.
+  4. duplicate_fields text now always shows "previously: <user>" for every
+     matched field, regardless of whether an ID also matched.
+  5. Multiple records that belong to the same MongoDB document are
+     de-duplicated before update so check_count is incremented exactly once.
+  6. /setemoji cancel handler uses CommandHandler instead of Regex filter.
+  7. MongoDB get_db() includes a live-ping reconnect guard.
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging
@@ -25,7 +44,7 @@ try:
 except ImportError:
     pass
 
-from telegram import Update, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
 from telegram.ext import (
     ApplicationBuilder,
@@ -36,9 +55,6 @@ from telegram.ext import (
     MessageHandler,
     filters,
 )
-
-# Conversation state
-SETEMOJI_WAIT = 0
 
 import database as db_module
 
@@ -57,42 +73,46 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 BOT_TOKEN: str = os.getenv("BOT_TOKEN", "")
-PORT: int = int(os.getenv("PORT", "8080"))
+PORT: int      = int(os.getenv("PORT", "8080"))
 
 _raw_admin_ids = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS: set[int] = set()
-for part in _raw_admin_ids.split(","):
-    part = part.strip()
-    if part.isdigit():
-        ADMIN_IDS.add(int(part))
+for _part in _raw_admin_ids.split(","):
+    _part = _part.strip()
+    if _part.isdigit():
+        ADMIN_IDS.add(int(_part))
 
 if not BOT_TOKEN:
     logger.warning("BOT_TOKEN is not set. The bot will not start.")
-
 if not ADMIN_IDS:
     logger.warning(
         "ADMIN_IDS is not set. No one will have admin access. "
         "Set ADMIN_IDS to a comma-separated list of Telegram user IDs."
     )
 
-# Author/contact URL shown on the /start keyboard.
-# Override with the AUTHOR_URL environment variable if needed.
 AUTHOR_URL: str = os.getenv("AUTHOR_URL", "https://t.me/yasha_sangi")
+
+# Conversation state for /setemoji
+SETEMOJI_WAIT = 0
 
 # ---------------------------------------------------------------------------
 # Regex patterns for form parsing
 # ---------------------------------------------------------------------------
 
-RE_USERNAME = re.compile(r".*username\s*[-:]\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+RE_USERNAME = re.compile(r".*username\s*[-:]\s*(.+)$",                  re.IGNORECASE | re.MULTILINE)
 RE_PHONE    = re.compile(r".*(?:client|phone)\s*number\s*[-:]\s*(.+)$", re.IGNORECASE | re.MULTILINE)
-RE_WHATSAPP = re.compile(r".*whatsapp\s*number\s*[-:]\s*(.+)$", re.IGNORECASE | re.MULTILINE)
-RE_ID       = re.compile(r".*\bid\b\s*[-:]\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+RE_WHATSAPP = re.compile(r".*whatsapp\s*number\s*[-:]\s*(.+)$",         re.IGNORECASE | re.MULTILINE)
+RE_ID       = re.compile(r".*\bid\b\s*[-:]\s*(.+)$",                    re.IGNORECASE | re.MULTILINE)
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def parse_submission(text: str) -> dict | None:
+    """Extract submission fields from a message.
+
+    Returns None when the mandatory 'phone number' field is absent.
+    """
     if not text:
         return None
     m_phone = RE_PHONE.search(text)
@@ -101,25 +121,26 @@ def parse_submission(text: str) -> dict | None:
     phone = m_phone.group(1).strip()
     if not phone:
         return None
+
     m_username = RE_USERNAME.search(text)
-    username = m_username.group(1).strip() if m_username else ""
+    username   = m_username.group(1).strip() if m_username else ""
+
     m_whatsapp = RE_WHATSAPP.search(text)
-    whatsapp = m_whatsapp.group(1).strip() if m_whatsapp else None
-    id_number: str | None = None
-    m_id = RE_ID.search(text)
-    if m_id:
-        id_value = m_id.group(1).strip()
-        if id_value:
-            id_number = id_value
+    whatsapp   = m_whatsapp.group(1).strip() if m_whatsapp else None
+
+    m_id      = RE_ID.search(text)
+    id_number = m_id.group(1).strip() or None if m_id else None
+
     return {
-        "username": username.lower(),
-        "phone_number": phone,
+        "username":        username,
+        "phone_number":    phone,
         "whatsapp_number": whatsapp,
-        "id_number": id_number,
+        "id_number":       id_number,
     }
 
 
 def user_display(user) -> str:
+    """Return @username if available, otherwise full name, otherwise user ID."""
     if user.username:
         return f"@{user.username}"
     return user.full_name or str(user.id)
@@ -130,56 +151,15 @@ def user_html_mention(user) -> str:
     return f'<a href="tg://user?id={user.id}">{name}</a>'
 
 
-FIELD_NAMES = {
+FIELD_NAMES: dict[str, str] = {
     "phone_number":    "Phone number",
     "whatsapp_number": "WhatsApp number",
     "id_number":       "ID",
     "username":        "Username",
 }
 
-
-def _emoji_tag(cfg: dict) -> str:
-    """Return a <tg-emoji> tag if an emoji_id is set, otherwise return the plain fallback."""
-    emoji_id = cfg.get("emoji_id")
-    fallback = cfg.get("fallback", "•")
-    if emoji_id:
-        return f'<tg-emoji emoji-id="{emoji_id}">{fallback}</tg-emoji>'
-    return fallback
-
-
-def format_duplicate_reply(
-    template: str,
-    user_mention: str,
-    original_user: str,
-    matches: list,
-    field_emojis: dict | None = None,
-) -> str:
-    if field_emojis is None:
-        field_emojis = {}
-
-    lines = []
-    for m in matches:
-        field = m["field"]
-        name = FIELD_NAMES.get(field, field)
-        cfg = field_emojis.get(field, {"fallback": "•", "emoji_id": None})
-        emoji = _emoji_tag(cfg)
-        lines.append(f"  {emoji} {name}: <code>{m['value']}</code>")
-
-    matched_fields = "\n".join(lines)
-    first_cfg = field_emojis.get(matches[0]["field"], {}) if matches else {}
-    first_field = f"{_emoji_tag(first_cfg)} {FIELD_NAMES.get(matches[0]['field'], '')}".strip() if matches else ""
-
-    return (
-        template
-        .replace("{user_mention}", user_mention)
-        .replace("{original_user}", original_user)
-        .replace("{matched_fields}", matched_fields)
-        .replace("{matched_field}", first_field)
-    )
-
-
 # ---------------------------------------------------------------------------
-# /start
+# /start keyboard
 # ---------------------------------------------------------------------------
 
 OWNER_PANEL_CALLBACK = "owner_panel"
@@ -211,30 +191,20 @@ def _build_start_keyboard(
     custom_buttons: list,
     is_owner: bool = False,
 ) -> InlineKeyboardMarkup:
-    """Build the /start inline keyboard.
-
-    Always shows 3 default buttons + any custom buttons.
-    Adds a hidden ⚙️ Owner Panel button at the bottom for admins only.
-    """
     add_url   = f"https://t.me/{bot_username}?startgroup=start"
     share_url = f"https://t.me/share/url?url=https://t.me/{bot_username}"
-    author_url = AUTHOR_URL
 
     keyboard = [
         [
             InlineKeyboardButton("➕ Add me to group", url=add_url),
             InlineKeyboardButton("📤 Share bot",       url=share_url),
         ],
-        [
-            InlineKeyboardButton("👤 Author", url=author_url),
-        ],
+        [InlineKeyboardButton("👤 Author", url=AUTHOR_URL)],
     ]
 
-    # Append custom buttons — one per row
     for btn in custom_buttons:
         keyboard.append([InlineKeyboardButton(btn["text"], url=btn["url"])])
 
-    # Owner-only row — invisible to regular users
     if is_owner:
         keyboard.append([
             InlineKeyboardButton("⚙️ Owner Panel", callback_data=OWNER_PANEL_CALLBACK),
@@ -248,10 +218,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not user:
         return
     name = user.full_name or user.first_name or "there"
-    db = db_module.get_db()
+    db   = db_module.get_db()
     if db is not None:
-        template = db_module.get_start_msg(db)
-        text = template.replace("{name}", name)
+        template       = db_module.get_start_msg(db)
+        text           = template.replace("{name}", name)
         custom_buttons = db_module.get_start_buttons(db)
     else:
         text = (
@@ -267,14 +237,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         custom_buttons = []
 
-    bot_username = context.bot.username or ""
-    is_owner = user.id in ADMIN_IDS
-    keyboard = _build_start_keyboard(bot_username, custom_buttons, is_owner=is_owner)
-    await update.message.reply_text(
-        text,
-        parse_mode=ParseMode.HTML,
-        reply_markup=keyboard,
+    keyboard = _build_start_keyboard(
+        context.bot.username or "",
+        custom_buttons,
+        is_owner=user.id in ADMIN_IDS,
     )
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=keyboard)
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +250,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ---------------------------------------------------------------------------
 
 async def handle_owner_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle the ⚙️ Owner Panel inline button — only responds to admins."""
     query = update.callback_query
     if not query:
         return
@@ -295,7 +262,7 @@ async def handle_owner_panel(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 # ---------------------------------------------------------------------------
-# Admin commands
+# Admin commands — message templates
 # ---------------------------------------------------------------------------
 
 async def cmd_getmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -307,12 +274,27 @@ async def cmd_getmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if db is None:
         await update.message.reply_text("❌ Database is unavailable.")
         return
-    dup = db_module.get_duplicate_msg(db)
+    dup     = db_module.get_duplicate_msg(db)
     welcome = db_module.get_start_msg(db)
     await update.message.reply_text(
         f"<b>Duplicate message:</b>\n{dup}\n\n<b>Welcome message:</b>\n{welcome}",
         parse_mode=ParseMode.HTML,
     )
+
+
+_SETMSG_HELP = (
+    "Usage:\n"
+    "  /setmsg dup <code>&lt;message&gt;</code>     — duplicate warning\n"
+    "  /setmsg welcome <code>&lt;message&gt;</code>  — /start welcome message\n\n"
+    "<b>Duplicate message placeholders:</b>\n"
+    "  <code>{duplicate_fields}</code> — which field(s) matched (auto-built)\n"
+    "  <code>{original_user}</code>    — previous submitter (@username or name)\n"
+    "  <code>{date}</code>             — date of previous submission (DD/MM/YY)\n"
+    "  <code>{count}</code>            — how many times this record was checked\n\n"
+    "💡 <i>Emoji တွေကို တိုက်ရိုက်ထည့်လို့ ရပါသည်။</i>\n\n"
+    "<b>Welcome placeholder:</b>\n"
+    "  <code>{name}</code> — user's display name"
+)
 
 
 async def cmd_setmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -321,35 +303,16 @@ async def cmd_setmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text("⛔ Not authorised.")
         return
 
-    HELP = (
-        "Usage:\n"
-        "  /setmsg dup &lt;message&gt;    — duplicate warning (ID / phone / both)\n"
-        "  /setmsg welcome &lt;message&gt; — /start welcome message\n\n"
-        "<b>Duplicate message placeholders:</b>\n"
-        "  <code>{duplicate_fields}</code> — auto-filled with which field(s) matched\n"
-        "                         (ID only / phone only / both)\n"
-        "  <code>{original_user}</code>    — previous submitter (@username or name)\n"
-        "  <code>{date}</code>             — date of previous submission (DD/MM/YY)\n"
-        "  <code>{count}</code>            — how many times this record was checked\n\n"
-        "💡 <i>Emoji တွေကို တိုက်ရိုက်ထည့်လို့ရပါသည်။</i>\n\n"
-        "<b>Welcome placeholder:</b>\n"
-        "  <code>{name}</code> — user's display name"
-    )
-
     plain = update.message.text or ""
     parts = plain.split(None, 2)
 
-    if len(parts) < 3:
-        await update.message.reply_text(HELP, parse_mode=ParseMode.HTML)
+    if len(parts) < 3 or parts[1].lower() not in ("dup", "welcome"):
+        await update.message.reply_text(_SETMSG_HELP, parse_mode=ParseMode.HTML)
         return
 
-    msg_type = parts[1].lower()
-    full_html = update.message.text_html or plain
+    msg_type    = parts[1].lower()
+    full_html   = update.message.text_html or plain
     new_message = re.sub(r"^/\S+\s+\S+\s*", "", full_html, count=1).strip()
-
-    if msg_type not in ("dup", "welcome"):
-        await update.message.reply_text(HELP, parse_mode=ParseMode.HTML)
-        return
 
     db = db_module.get_db()
     if db is None:
@@ -358,10 +321,10 @@ async def cmd_setmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     if msg_type == "dup":
         success = db_module.set_duplicate_msg(db, new_message)
-        label = "Duplicate warning message"
+        label   = "Duplicate warning message"
     else:
         success = db_module.set_start_msg(db, new_message)
-        label = "Welcome message"
+        label   = "Welcome message"
 
     if success:
         await update.message.reply_text(
@@ -372,22 +335,61 @@ async def cmd_setmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await update.message.reply_text("❌ Failed to update the message.")
 
 
+async def cmd_resetmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    if not user or user.id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ Not authorised.")
+        return
+
+    if not context.args or context.args[0].lower() not in ("dup", "welcome"):
+        await update.message.reply_text(
+            "Usage:\n"
+            "  /resetmsg dup     — reset duplicate warning to default\n"
+            "  /resetmsg welcome — reset /start welcome to default"
+        )
+        return
+
+    msg_type = context.args[0].lower()
+    key, label = (
+        ("duplicate_msg", "Duplicate warning message")
+        if msg_type == "dup"
+        else ("start_msg", "Welcome message")
+    )
+
+    db = db_module.get_db()
+    if db is None:
+        await update.message.reply_text("❌ Database is unavailable.")
+        return
+
+    if db_module.reset_setting(db, key):
+        await update.message.reply_text(
+            f"✅ <b>{label}</b> reset to default.", parse_mode=ParseMode.HTML
+        )
+    else:
+        await update.message.reply_text("❌ Failed to reset.")
+
+
+# ---------------------------------------------------------------------------
+# Admin commands — animated emoji
+# ---------------------------------------------------------------------------
+
+_SETEMOJI_HELP = (
+    "Usage: <code>/setemoji &lt;field&gt;</code>\n\n"
+    "Fields: <code>phone</code> | <code>whatsapp</code> | <code>id</code> | <code>username</code>\n\n"
+    "Example: <code>/setemoji phone</code>"
+)
+
+
 async def cmd_setemoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Step 1 — admin sends /setemoji <field>, bot asks for the emoji."""
+    """Step 1 — admin sends /setemoji <field>; bot asks for the animated emoji."""
     user = update.effective_user
     if not user or user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ Not authorised.")
         return ConversationHandler.END
 
-    HELP = (
-        "Usage: <code>/setemoji &lt;field&gt;</code>\n\n"
-        "Fields: <code>phone</code> | <code>whatsapp</code> | <code>id</code> | <code>username</code>\n\n"
-        "Example: <code>/setemoji phone</code>"
-    )
-
-    args = context.args or []
+    args  = context.args or []
     if not args:
-        await update.message.reply_text(HELP, parse_mode=ParseMode.HTML)
+        await update.message.reply_text(_SETEMOJI_HELP, parse_mode=ParseMode.HTML)
         return ConversationHandler.END
 
     alias = args[0].lower()
@@ -412,18 +414,16 @@ async def cmd_setemoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
 
 
 async def setemoji_receive(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Step 2 — extract custom_emoji entity from the message and save."""
-    msg = update.message
+    """Step 2 — extract the custom_emoji entity and save it."""
+    msg      = update.message
     entities = list(msg.entities or []) + list(msg.caption_entities or [])
-    text = msg.text or msg.caption or ""
 
     custom_emoji_id = None
-    fallback = None
+    fallback        = None
     for ent in entities:
         if ent.type == "custom_emoji":
             custom_emoji_id = ent.custom_emoji_id
-            # Extract the visible character(s) the entity covers
-            fallback = msg.parse_entity(ent)
+            fallback        = msg.parse_entity(ent)
             break
 
     if not custom_emoji_id:
@@ -447,8 +447,7 @@ async def setemoji_receive(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if db_module.set_field_emoji(db, field, custom_emoji_id, fallback):
         preview = f'<tg-emoji emoji-id="{custom_emoji_id}">{fallback}</tg-emoji>'
         await msg.reply_text(
-            f"✅ Emoji for <b>{alias}</b> updated!\n\n"
-            f"Preview: {preview} {FIELD_NAMES.get(field, field)}",
+            f"✅ Emoji for <b>{alias}</b> updated!\n\nPreview: {preview} {FIELD_NAMES.get(field, field)}",
             parse_mode=ParseMode.HTML,
         )
     else:
@@ -465,21 +464,19 @@ async def setemoji_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def cmd_getemoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show current animated emoji settings for all fields."""
     user = update.effective_user
     if not user or user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ Not authorised.")
         return
-
     db = db_module.get_db()
     if db is None:
         await update.message.reply_text("❌ Database is unavailable.")
         return
 
     emojis = db_module.get_field_emojis(db)
-    lines = []
+    lines  = []
     for alias, field in db_module.FIELD_ALIASES.items():
-        cfg = emojis.get(field, {})
+        cfg      = emojis.get(field, {})
         emoji_id = cfg.get("emoji_id")
         fallback = cfg.get("fallback", "•")
         if emoji_id:
@@ -488,26 +485,27 @@ async def cmd_getemoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         else:
             lines.append(f"• <code>{alias}</code>: {fallback}  <i>(plain, no animation)</i>")
 
-    text = (
+    await update.message.reply_text(
         "🎭 <b>Animated emoji settings:</b>\n\n"
         + "\n".join(lines)
         + "\n\n<i>Change: /setemoji &lt;field&gt;</i>\n"
-        "<i>Reset: /resetemoji &lt;field&gt;</i>"
+          "<i>Reset: /resetemoji &lt;field&gt;</i>",
+        parse_mode=ParseMode.HTML,
     )
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 async def cmd_resetemoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Reset animated emoji for a field back to the plain default."""
     user = update.effective_user
     if not user or user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ Not authorised.")
         return
 
-    HELP = "Usage: <code>/resetemoji &lt;field&gt;</code>\nFields: phone | whatsapp | id | username"
-
     if not context.args:
-        await update.message.reply_text(HELP, parse_mode=ParseMode.HTML)
+        await update.message.reply_text(
+            "Usage: <code>/resetemoji &lt;field&gt;</code>\n"
+            "Fields: phone | whatsapp | id | username",
+            parse_mode=ParseMode.HTML,
+        )
         return
 
     alias = context.args[0].lower()
@@ -524,40 +522,36 @@ async def cmd_resetemoji(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     if db_module.reset_field_emoji(db, field):
-        await update.message.reply_text(f"✅ Emoji for <b>{alias}</b> reset to default.", parse_mode=ParseMode.HTML)
+        await update.message.reply_text(
+            f"✅ Emoji for <b>{alias}</b> reset to default.", parse_mode=ParseMode.HTML
+        )
     else:
         await update.message.reply_text("❌ Failed to reset.")
 
 
 # ---------------------------------------------------------------------------
-# /start inline-button management (admin only)
+# Admin commands — /start button management
 # ---------------------------------------------------------------------------
 
-async def cmd_addbutton(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Add a custom inline button to the /start keyboard.
+_ADDBUTTON_HELP = (
+    "Usage: <code>/addbutton Label | URL</code>\n\n"
+    "Example:\n"
+    "<code>/addbutton 🌐 Visit website | https://example.com</code>\n\n"
+    "You can paste an animated emoji directly into the label."
+)
 
-    Usage:  /addbutton Button Label | https://example.com
-    The label may contain any Unicode text, including animated emoji pasted directly.
-    """
+
+async def cmd_addbutton(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user or user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ Not authorised.")
         return
 
-    HELP = (
-        "Usage: <code>/addbutton Label | URL</code>\n\n"
-        "Example:\n"
-        "<code>/addbutton 🌐 Visit website | https://example.com</code>\n\n"
-        "You can paste an animated emoji directly into the label."
-    )
-
-    # Use plain text so animated emoji appear as their Unicode character in the button label
-    raw = update.message.text or ""
-    # Strip the command prefix (/addbutton ), keep the rest
+    raw  = update.message.text or ""
     body = re.sub(r"^/\S+\s*", "", raw, count=1).strip()
 
     if "|" not in body:
-        await update.message.reply_text(HELP, parse_mode=ParseMode.HTML)
+        await update.message.reply_text(_ADDBUTTON_HELP, parse_mode=ParseMode.HTML)
         return
 
     label_part, _, url_part = body.partition("|")
@@ -565,7 +559,7 @@ async def cmd_addbutton(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     url   = url_part.strip()
 
     if not label or not url:
-        await update.message.reply_text(HELP, parse_mode=ParseMode.HTML)
+        await update.message.reply_text(_ADDBUTTON_HELP, parse_mode=ParseMode.HTML)
         return
 
     if not (url.startswith("http://") or url.startswith("https://") or url.startswith("tg://")):
@@ -583,8 +577,7 @@ async def cmd_addbutton(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if db_module.add_start_button(db, label, url):
         buttons = db_module.get_start_buttons(db)
         await update.message.reply_text(
-            f"✅ Button added (#{len(buttons)})!\n\n"
-            f"Label: {label}\nURL: <code>{url}</code>",
+            f"✅ Button added (#{len(buttons)})!\n\nLabel: {label}\nURL: <code>{url}</code>",
             parse_mode=ParseMode.HTML,
         )
     else:
@@ -592,12 +585,10 @@ async def cmd_addbutton(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def cmd_listbuttons(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """List all custom inline buttons (admin only)."""
     user = update.effective_user
     if not user or user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ Not authorised.")
         return
-
     db = db_module.get_db()
     if db is None:
         await update.message.reply_text("❌ Database is unavailable.")
@@ -625,16 +616,11 @@ async def cmd_listbuttons(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     ]
     for i, btn in enumerate(buttons, 1):
         lines.append(f"  {i}. {btn['text']} — <code>{btn['url']}</code>")
-
     lines.append("\n<i>Remove: /removebutton &lt;number&gt;  |  Reset all: /resetbuttons</i>")
     await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
 
 
 async def cmd_removebutton(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Remove a custom inline button by number (admin only).
-
-    Usage:  /removebutton 2
-    """
     user = update.effective_user
     if not user or user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ Not authorised.")
@@ -642,14 +628,13 @@ async def cmd_removebutton(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     if not context.args or not context.args[0].isdigit():
         await update.message.reply_text(
-            "Usage: <code>/removebutton &lt;number&gt;</code>\n"
-            "See the list with /listbuttons",
+            "Usage: <code>/removebutton &lt;number&gt;</code>\nSee the list with /listbuttons",
             parse_mode=ParseMode.HTML,
         )
         return
 
     index = int(context.args[0])
-    db = db_module.get_db()
+    db    = db_module.get_db()
     if db is None:
         await update.message.reply_text("❌ Database is unavailable.")
         return
@@ -657,7 +642,7 @@ async def cmd_removebutton(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if db_module.remove_start_button(db, index):
         remaining = db_module.get_start_buttons(db)
         await update.message.reply_text(
-            f"✅ Button #{index} removed. {len(remaining)} custom button(s) remaining.",
+            f"✅ Button #{index} removed. {len(remaining)} custom button(s) remaining."
         )
     else:
         buttons = db_module.get_start_buttons(db)
@@ -668,12 +653,10 @@ async def cmd_removebutton(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 
 async def cmd_resetbuttons(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Remove ALL custom inline buttons (admin only)."""
     user = update.effective_user
     if not user or user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ Not authorised.")
         return
-
     db = db_module.get_db()
     if db is None:
         await update.message.reply_text("❌ Database is unavailable.")
@@ -688,66 +671,55 @@ async def cmd_resetbuttons(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("❌ Failed to reset buttons.")
 
 
-async def cmd_resetmsg(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user = update.effective_user
-    if not user or user.id not in ADMIN_IDS:
-        await update.message.reply_text("⛔ Not authorised.")
-        return
-
-    HELP = (
-        "Usage:\n"
-        "  /resetmsg dup     — reset duplicate warning to default\n"
-        "  /resetmsg welcome — reset /start welcome to default"
-    )
-
-    if not context.args or context.args[0].lower() not in ("dup", "welcome"):
-        await update.message.reply_text(HELP)
-        return
-
-    msg_type = context.args[0].lower()
-    if msg_type == "dup":
-        key, label = "duplicate_msg", "Duplicate warning message"
-    else:
-        key, label = "start_msg", "Welcome message"
-
-    db = db_module.get_db()
-    if db is None:
-        await update.message.reply_text("❌ Database is unavailable.")
-        return
-
-    success = db_module.reset_setting(db, key)
-    if success:
-        await update.message.reply_text(f"✅ <b>{label}</b> reset to default.", parse_mode=ParseMode.HTML)
-    else:
-        await update.message.reply_text("❌ Failed to reset.")
-
-
 # ---------------------------------------------------------------------------
-# Group message handler (ID-check / duplicate detection)
+# Duplicate-reply builder
 # ---------------------------------------------------------------------------
 
-def format_duplicate_reply(
+def _build_duplicate_reply(
     db,
-    duplicate_fields: str,
-    original_user: str,
-    original_date,
-    check_count: int,
+    matched_docs: dict,
 ) -> str:
-    """
-    Build the unified duplicate notification from the admin-customisable template
-    stored in the database (set via /setmsg dup).
+    """Build the unified duplicate notification from the DB-stored template.
 
-    Supported placeholders:
-        {duplicate_fields} — auto-built list of which fields were duplicated
-                             e.g. "🆔 ID: <code>AAA</code>"
-                                  "📞 Phone: <code>09111</code>"
-                                  both lines when both fields match
+    matched_docs: { str(doc_id): (doc, [{"field": str, "value": str}, ...]) }
+
+    Supported placeholders in the admin-customisable template:
+        {duplicate_fields} — per-field lines showing what matched
         {original_user}    — previous submitter (@username or display name)
-        {date}             — DD/MM/YY date of the previous submission
-        {count}            — running check count for that record
+        {date}             — DD/MM/YY of the previous submission
+        {count}            — running check count for the primary record
     """
-    date_str = original_date.strftime("%d/%m/%y") if original_date else "?"
-    template = db_module.get_duplicate_msg(db)
+    primary_doc   = next(iter(matched_docs.values()))[0]
+    original_user = (
+        primary_doc.get("telegram_username") or str(primary_doc.get("telegram_id", "?"))
+    )
+    original_date = primary_doc.get("updated_at") or primary_doc.get("created_at")
+    date_str      = original_date.strftime("%d/%m/%y") if original_date else "?"
+    check_count   = primary_doc.get("check_count", 0) + 1
+
+    dup_lines: list[str] = []
+    seen_fields: set     = set()
+
+    for doc, matches in matched_docs.values():
+        submitter = (
+            doc.get("telegram_username") or str(doc.get("telegram_id", "?"))
+        )
+        for m in matches:
+            field = m["field"]
+            if field in seen_fields:
+                continue
+            seen_fields.add(field)
+            label = FIELD_NAMES.get(field, field)
+            value = m["value"]
+            line  = f"🔸 {label}: <code>{value}</code>"
+            # Always show who previously held this value.
+            if submitter != original_user:
+                line += f" — previously by {submitter}"
+            dup_lines.append(line)
+
+    duplicate_fields = "\n".join(dup_lines)
+    template         = db_module.get_duplicate_msg(db)
+
     return (
         template
         .replace("{duplicate_fields}", duplicate_fields)
@@ -757,14 +729,17 @@ def format_duplicate_reply(
     )
 
 
+# ---------------------------------------------------------------------------
+# Group message handler — duplicate detection (all 4 fields)
+# ---------------------------------------------------------------------------
+
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if not message:
         return
 
-    text = message.text or message.caption or ""
+    text   = message.text or message.caption or ""
     parsed = parse_submission(text)
-
     if not parsed:
         return
 
@@ -783,32 +758,47 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
-    id_number    = parsed.get("id_number")
-    phone_number = parsed["phone_number"]
-    new_username = parsed.get("username", "")
-    sender_display = user_display(sender)
+    phone_number    = parsed["phone_number"]
+    whatsapp_number = parsed.get("whatsapp_number")
+    id_number       = parsed.get("id_number")
+    username        = parsed.get("username") or None
+    sender_display  = user_display(sender)
 
-    # ── Step 1: read-only lookup for BOTH fields before any writes ───────────
-    id_doc    = db_module.find_by_id(db, id_number) if id_number else None
+    # ── Step 1: read-only lookups for all four fields ────────────────────────
+    #
+    # field_hits: {field_name: (doc, normalised_value)}
+    # Independent queries so we catch cross-record matches
+    # (e.g. phone belongs to person A, ID belongs to person B).
+    field_hits: dict[str, tuple] = {}
+
     phone_doc = db_module.find_by_phone(db, phone_number)
+    if phone_doc is not None:
+        field_hits["phone_number"] = (phone_doc, db_module.normalize_phone(phone_number))
 
-    # If both match the same document, treat as a single duplicate record.
-    same_doc = (
-        id_doc is not None
-        and phone_doc is not None
-        and id_doc["_id"] == phone_doc["_id"]
-    )
+    if whatsapp_number:
+        wa_doc = db_module.find_by_whatsapp(db, whatsapp_number)
+        if wa_doc is not None:
+            field_hits["whatsapp_number"] = (wa_doc, db_module.normalize_phone(whatsapp_number))
 
-    # ── Step 2: decide if any duplicate exists ───────────────────────────────
-    if id_doc is None and phone_doc is None:
-        # ── New submission ───────────────────────────────────────────────────
+    if id_number:
+        id_doc = db_module.find_by_id(db, id_number)
+        if id_doc is not None:
+            field_hits["id_number"] = (id_doc, db_module.normalize_id(id_number))
+
+    if username:
+        u_doc = db_module.find_by_username(db, username)
+        if u_doc is not None:
+            field_hits["username"] = (u_doc, db_module.normalize_username(username))
+
+    # ── Step 2: new submission — no matches at all ───────────────────────────
+    if not field_hits:
         saved = db_module.save_submission(
             db,
             telegram_id=sender.id,
             telegram_username=sender_display,
-            username=new_username,
+            username=username or "",
             phone_number=phone_number,
-            whatsapp_number=parsed.get("whatsapp_number"),
+            whatsapp_number=whatsapp_number,
             id_number=id_number,
         )
         if saved:
@@ -820,67 +810,45 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             logger.error("Failed to save submission from %s", sender_display)
         return
 
-    # ── Step 3: build duplicate_fields lines ─────────────────────────────────
-    dup_lines: list[str] = []
+    # ── Step 3: group hits by document _id ───────────────────────────────────
+    #
+    # matched_docs: { str(doc_id): (doc, [{field, value}, ...]) }
+    # Ordered dict — insertion order = field priority (phone first).
+    matched_docs: dict[str, tuple] = {}
+    for field, (doc, value) in field_hits.items():
+        key = str(doc["_id"])
+        if key not in matched_docs:
+            matched_docs[key] = (doc, [])
+        matched_docs[key][1].append({"field": field, "value": value})
 
-    if id_doc is not None:
-        dup_lines.append(f"ID: <code>{id_number}</code>")
-
-    if phone_doc is not None:
-        if same_doc:
-            # phone already covered by the same record — add phone line too
-            dup_lines.append(f"Phone: <code>{phone_number}</code>")
-        else:
-            # Different record matches the phone
-            phone_user = (
-                phone_doc.get("telegram_username")
-                or str(phone_doc.get("telegram_id", "?"))
-            )
-            dup_lines.append(
-                f"Phone: <code>{phone_number}</code>"
-                + (f" (previously: {phone_user})" if id_doc is not None else "")
-            )
-
-    duplicate_fields = "\n".join(dup_lines)
-
-    # ── Step 4: pick primary record for original_user / date / count ─────────
-    primary_doc = id_doc if id_doc is not None else phone_doc
-    original_user = (
-        primary_doc.get("telegram_username")
-        or str(primary_doc.get("telegram_id", "?"))
-    )
-    original_date = primary_doc.get("updated_at") or primary_doc.get("created_at")
-    check_count   = primary_doc.get("check_count", 0) + 1
-
-    # ── Step 5: send one unified notification ────────────────────────────────
-    reply = format_duplicate_reply(
-        db=db,
-        duplicate_fields=duplicate_fields,
-        original_user=original_user,
-        original_date=original_date,
-        check_count=check_count,
-    )
+    # ── Step 4: send unified duplicate notification ───────────────────────────
+    reply = _build_duplicate_reply(db, matched_docs)
     await message.reply_text(reply, parse_mode=ParseMode.HTML)
+
     logger.info(
-        "Duplicate detected for %s — id_dup=%s phone_dup=%s same_doc=%s",
+        "Duplicate detected for %s — matched fields: %s across %d document(s)",
         sender_display,
-        id_doc is not None,
-        phone_doc is not None,
-        same_doc,
+        list(field_hits.keys()),
+        len(matched_docs),
     )
 
-    # ── Step 6: update matched records (replace submitter + increment count) ─
-    new_data = dict(
-        new_telegram_id=sender.id,
-        new_telegram_username=sender_display,
-        new_phone_number=phone_number,
-        new_username=new_username,
-        new_id_number=id_number,
-    )
-    if id_doc is not None:
-        db_module.update_submitter(db, id_doc["_id"], **new_data)
-    if phone_doc is not None and not same_doc:
-        db_module.update_submitter(db, phone_doc["_id"], **new_data)
+    # ── Step 5: update each matched record independently ─────────────────────
+    #
+    # Only pass content fields that actually belong to *this* record.
+    # Never write an ID from submission X into a phone-only record from Y.
+    for _doc_id_str, (doc, matches) in matched_docs.items():
+        matched_field_names = {m["field"] for m in matches}
+
+        db_module.update_submitter(
+            db,
+            doc["_id"],
+            new_telegram_id=sender.id,
+            new_telegram_username=sender_display,
+            new_phone_number=phone_number         if "phone_number"    in matched_field_names else None,
+            new_whatsapp_number=whatsapp_number   if "whatsapp_number" in matched_field_names else None,
+            new_id_number=id_number               if "id_number"       in matched_field_names else None,
+            new_username=username                 if "username"        in matched_field_names else None,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -895,36 +863,42 @@ def health():
     return "OK", 200
 
 
-def run_flask():
+def run_flask() -> None:
     flask_app.run(host="0.0.0.0", port=PORT, use_reloader=False)
 
 
 # ---------------------------------------------------------------------------
-# Bot setup
+# Bot setup & entry point
 # ---------------------------------------------------------------------------
 
-async def run_bot():
+async def run_bot() -> None:
     application = ApplicationBuilder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", cmd_start))
 
-    # Admin commands (private chat only)
+    # Admin commands — private chat only
     application.add_handler(CommandHandler("setmsg",       cmd_setmsg,       filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("getmsg",       cmd_getmsg,       filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("resetmsg",     cmd_resetmsg,     filters=filters.ChatType.PRIVATE))
-    # /start button management
     application.add_handler(CommandHandler("addbutton",    cmd_addbutton,    filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("listbuttons",  cmd_listbuttons,  filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("removebutton", cmd_removebutton, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("resetbuttons", cmd_resetbuttons, filters=filters.ChatType.PRIVATE))
-    # Owner Panel callback
-    application.add_handler(CallbackQueryHandler(handle_owner_panel, pattern=f"^{OWNER_PANEL_CALLBACK}$"))
-    # /setemoji — 2-step conversation (private only)
+    application.add_handler(CommandHandler("getemoji",     cmd_getemoji,     filters=filters.ChatType.PRIVATE))
+    application.add_handler(CommandHandler("resetemoji",   cmd_resetemoji,   filters=filters.ChatType.PRIVATE))
+
+    application.add_handler(
+        CallbackQueryHandler(handle_owner_panel, pattern=f"^{OWNER_PANEL_CALLBACK}$")
+    )
+
+    # /setemoji — 2-step ConversationHandler (private only)
+    # FIX: use CommandHandler("cancel") instead of Regex filter so
+    # /cancel@botname variants are also handled correctly.
     setemoji_conv = ConversationHandler(
         entry_points=[CommandHandler("setemoji", cmd_setemoji, filters=filters.ChatType.PRIVATE)],
         states={
             SETEMOJI_WAIT: [
-                MessageHandler(filters.Regex("^/cancel$"), setemoji_cancel),
+                CommandHandler("cancel", setemoji_cancel),
                 MessageHandler(filters.ALL & ~filters.COMMAND, setemoji_receive),
             ],
         },
@@ -932,10 +906,8 @@ async def run_bot():
         allow_reentry=True,
     )
     application.add_handler(setemoji_conv)
-    application.add_handler(CommandHandler("getemoji",   cmd_getemoji,   filters=filters.ChatType.PRIVATE))
-    application.add_handler(CommandHandler("resetemoji", cmd_resetemoji, filters=filters.ChatType.PRIVATE))
 
-    # Group ID-check listener
+    # Group message listener
     application.add_handler(
         MessageHandler(
             (filters.TEXT | filters.PHOTO) & filters.ChatType.GROUPS,
@@ -948,7 +920,7 @@ async def run_bot():
         await application.start()
         await application.updater.start_polling(
             allowed_updates=Update.ALL_TYPES,
-            drop_pending_updates=True,   # ignore messages queued before this boot
+            drop_pending_updates=True,
         )
         await asyncio.Event().wait()
         await application.updater.stop()

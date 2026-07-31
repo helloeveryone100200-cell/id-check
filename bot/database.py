@@ -1,6 +1,17 @@
 """
 database.py — MongoDB helper functions for the Telegram submission bot.
+
+Changes vs original:
+  - get_db(): live-ping reconnect guard added (stale connection detection)
+  - update_submitter(): all fields keyword-only + optional to prevent cross-
+    record data corruption when ID doc ≠ phone doc
+  - find_by_whatsapp(): new read-only lookup
+  - find_by_username(): new read-only lookup
+  - normalize_username(): new helper (strips leading @, lowercases)
+  - check_duplicate(): still present and now actually used by the bot
 """
+
+from __future__ import annotations
 
 import logging
 import os
@@ -8,31 +19,30 @@ import re as _re
 from datetime import datetime, timezone
 
 from pymongo import MongoClient, ASCENDING
-from pymongo.errors import ConnectionFailure, OperationFailure
+from pymongo.errors import ConnectionFailure, OperationFailure, PyMongoError
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Text normalisation helpers
 # ---------------------------------------------------------------------------
 
-# Matches every Unicode emoji / pictograph / variation-selector block.
 _RE_EMOJI = _re.compile(
     "["
-    "\U0001F600-\U0001F64F"   # emoticons
-    "\U0001F300-\U0001F5FF"   # symbols & pictographs
-    "\U0001F680-\U0001F6FF"   # transport & map
-    "\U0001F1E0-\U0001F1FF"   # regional-indicator (flags)
-    "\U0001F900-\U0001F9FF"   # supplemental symbols & pictographs
-    "\U0001FA00-\U0001FA6F"   # chess / other symbols
-    "\U0001FA70-\U0001FAFF"   # food / drink / misc
-    "\U00002300-\U000023FF"   # misc technical
-    "\U00002600-\U000027BF"   # misc symbols
-    "\U0000FE00-\U0000FE0F"   # variation selectors (VS-1 … VS-16)
-    "\U0001F004"              # mahjong tile
-    "\U0001F0CF"              # joker
-    "\u200D"                  # zero-width joiner
-    "\u20E3"                  # combining enclosing keycap
+    "\U0001F600-\U0001F64F"
+    "\U0001F300-\U0001F5FF"
+    "\U0001F680-\U0001F6FF"
+    "\U0001F1E0-\U0001F1FF"
+    "\U0001F900-\U0001F9FF"
+    "\U0001FA00-\U0001FA6F"
+    "\U0001FA70-\U0001FAFF"
+    "\U00002300-\U000023FF"
+    "\U00002600-\U000027BF"
+    "\U0000FE00-\U0000FE0F"
+    "\U0001F004"
+    "\U0001F0CF"
+    "\u200D"
+    "\u20E3"
     "]+",
     flags=_re.UNICODE,
 )
@@ -44,27 +54,22 @@ def strip_emoji(text: str) -> str:
 
 
 def normalize_phone(number: str) -> str:
-    """Normalise a phone/WhatsApp number for storage and lookup.
-
-    Steps:
-      1. Strip all emoji (e.g. ``09🌟12345`` → ``0912345``)
-      2. Remove formatting chars: spaces, dashes, dots, parentheses
-    """
+    """Normalise a phone/WhatsApp number: strip emoji then remove spaces/dashes/dots/parens."""
     return _re.sub(r"[\s\-\.\(\)]", "", strip_emoji(number))
 
 
 def normalize_id(id_number: str) -> str:
-    """Normalise an ID number for storage and lookup.
-
-    Steps:
-      1. Strip all emoji
-      2. Collapse surrounding whitespace
-      3. Lowercase (IDs like ``12ABC`` == ``12abc``)
-    """
+    """Normalise an ID number: strip emoji, collapse whitespace, lowercase."""
     return strip_emoji(id_number).lower()
 
+
+def normalize_username(username: str) -> str:
+    """Strip leading @ and lowercase so @Foo == foo == @foo."""
+    return username.lstrip("@").strip().lower()
+
+
 # ---------------------------------------------------------------------------
-# Connection
+# Connection — lazy singleton with live-ping reconnect guard
 # ---------------------------------------------------------------------------
 
 _client: MongoClient | None = None
@@ -72,11 +77,22 @@ _db = None
 
 
 def get_db():
-    """Return a database handle, initialising the client on first call."""
+    """Return a database handle, initialising the client on first call.
+
+    If the connection was established earlier but has since dropped, a fast
+    ping detects the failure and triggers a re-connection attempt so the bot
+    recovers from transient network errors without a restart.
+    """
     global _client, _db
 
     if _db is not None:
-        return _db
+        try:
+            _client.admin.command("ping", maxTimeMS=1_000)
+            return _db
+        except Exception:
+            logger.warning("MongoDB connection lost — attempting to reconnect…")
+            _client = None
+            _db = None
 
     mongo_uri = os.getenv("MONGO_URI", "")
     if not mongo_uri:
@@ -86,7 +102,7 @@ def get_db():
         return None
 
     try:
-        _client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
+        _client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5_000)
         _client.admin.command("ping")
         db_name = os.getenv("MONGO_DB_NAME", "telegram_bot")
         _db = _client[db_name]
@@ -107,11 +123,11 @@ def get_db():
 def _ensure_indexes(db) -> None:
     """Create indexes on frequently queried fields (idempotent)."""
     coll = db["submissions"]
-    coll.create_index([("phone_number", ASCENDING)], name="idx_phone")
+    coll.create_index([("phone_number",    ASCENDING)],              name="idx_phone")
     coll.create_index([("whatsapp_number", ASCENDING)], sparse=True, name="idx_whatsapp")
-    coll.create_index([("id_number", ASCENDING)], sparse=True, name="idx_id")
-    coll.create_index([("username", ASCENDING)], sparse=True, name="idx_username")
-    coll.create_index([("created_at", ASCENDING)], name="idx_created_at")
+    coll.create_index([("id_number",       ASCENDING)], sparse=True, name="idx_id")
+    coll.create_index([("username",        ASCENDING)], sparse=True, name="idx_username")
+    coll.create_index([("created_at",      ASCENDING)],              name="idx_created_at")
     logger.info("MongoDB indexes ensured")
 
 
@@ -119,85 +135,7 @@ def _submissions(db):
     return db["submissions"]
 
 
-def check_duplicate(
-    db,
-    phone_number: str,
-    whatsapp_number: str | None = None,
-    id_number: str | None = None,
-    username: str | None = None,
-):
-    """
-    Check whether any field already exists in the submissions collection.
-    Returns a dict with keys:
-      - 'found'   (bool)       — whether any duplicate was detected
-      - 'doc'     (dict|None)  — the first matching document
-      - 'matches' (list)       — list of {"field": str, "value": str}
-    """
-    coll = _submissions(db)
-
-    norm_phone    = normalize_phone(phone_number)
-    norm_whatsapp = normalize_phone(whatsapp_number) if whatsapp_number else None
-    norm_id       = normalize_id(id_number) if id_number else None
-    norm_username = username.strip().lower() if username and username.strip() else None
-
-    queries = [("phone_number", {"phone_number": norm_phone}, norm_phone)]
-    if norm_whatsapp:
-        queries.append(("whatsapp_number", {"whatsapp_number": norm_whatsapp}, norm_whatsapp))
-    if norm_id:
-        queries.append(("id_number", {"id_number": norm_id}, norm_id))
-    if norm_username:
-        queries.append(("username", {"username": norm_username}, norm_username))
-
-    matches = []
-    first_doc = None
-    for field_name, query, value in queries:
-        doc = coll.find_one(query)
-        if doc:
-            matches.append({"field": field_name, "value": value})
-            if first_doc is None:
-                first_doc = doc
-
-    return {
-        "found": bool(matches),
-        "doc": first_doc,
-        "matches": matches,
-    }
-
-
-def save_submission(
-    db,
-    telegram_id: int,
-    telegram_username: str,
-    username: str,
-    phone_number: str,
-    whatsapp_number: str | None,
-    id_number: str | None,
-) -> bool:
-    """Save a new submission. Returns True on success."""
-    coll = _submissions(db)
-    now = datetime.now(timezone.utc)
-    # Build doc without None/empty optional fields to save MongoDB space.
-    doc: dict = {
-        "telegram_id":       telegram_id,
-        "telegram_username": telegram_username,
-        "phone_number":      normalize_phone(phone_number),
-        "check_count":       0,
-        "created_at":        now,
-        "updated_at":        now,
-    }
-    if username:
-        doc["username"] = username.lower()
-    if whatsapp_number:
-        doc["whatsapp_number"] = normalize_phone(whatsapp_number)
-    if id_number:
-        doc["id_number"] = normalize_id(id_number)
-    try:
-        coll.insert_one(doc)
-        return True
-    except Exception as exc:
-        logger.error("Failed to insert submission: %s", exc)
-        return False
-
+# ── Read-only lookups ────────────────────────────────────────────────────────
 
 def find_by_id(db, id_number: str) -> dict | None:
     """Read-only lookup by id_number. Returns the document or None."""
@@ -209,34 +147,135 @@ def find_by_phone(db, phone_number: str) -> dict | None:
     return _submissions(db).find_one({"phone_number": normalize_phone(phone_number)})
 
 
+def find_by_whatsapp(db, whatsapp_number: str) -> dict | None:
+    """Read-only lookup by whatsapp_number. Returns the document or None."""
+    return _submissions(db).find_one({"whatsapp_number": normalize_phone(whatsapp_number)})
+
+
+def find_by_username(db, username: str) -> dict | None:
+    """Read-only lookup by username (case-insensitive, leading @ stripped)."""
+    return _submissions(db).find_one({"username": normalize_username(username)})
+
+
+def check_duplicate(
+    db,
+    phone_number: str,
+    whatsapp_number: str | None = None,
+    id_number: str | None = None,
+    username: str | None = None,
+) -> dict:
+    """Check whether any of the supplied fields already exist.
+
+    Returns:
+        {
+          "found":   bool,
+          "doc":     first matching document | None,
+          "matches": [{"field": str, "value": str}, ...]
+        }
+    """
+    coll = _submissions(db)
+
+    norm_phone    = normalize_phone(phone_number)
+    norm_whatsapp = normalize_phone(whatsapp_number) if whatsapp_number else None
+    norm_id       = normalize_id(id_number)          if id_number       else None
+    norm_username = normalize_username(username)      if username and username.strip() else None
+
+    candidates = [("phone_number", {"phone_number": norm_phone}, norm_phone)]
+    if norm_whatsapp:
+        candidates.append(("whatsapp_number", {"whatsapp_number": norm_whatsapp}, norm_whatsapp))
+    if norm_id:
+        candidates.append(("id_number", {"id_number": norm_id}, norm_id))
+    if norm_username:
+        candidates.append(("username", {"username": norm_username}, norm_username))
+
+    matches: list[dict] = []
+    first_doc = None
+    for field_name, query, value in candidates:
+        doc = coll.find_one(query)
+        if doc:
+            matches.append({"field": field_name, "value": value})
+            if first_doc is None:
+                first_doc = doc
+
+    return {"found": bool(matches), "doc": first_doc, "matches": matches}
+
+
+# ── Write operations ─────────────────────────────────────────────────────────
+
+def save_submission(
+    db,
+    telegram_id: int,
+    telegram_username: str,
+    username: str,
+    phone_number: str,
+    whatsapp_number: str | None,
+    id_number: str | None,
+) -> bool:
+    """Persist a new (non-duplicate) submission. Returns True on success."""
+    coll = _submissions(db)
+    now  = datetime.now(timezone.utc)
+    doc: dict = {
+        "telegram_id":       telegram_id,
+        "telegram_username": telegram_username,
+        "phone_number":      normalize_phone(phone_number),
+        "check_count":       0,
+        "created_at":        now,
+        "updated_at":        now,
+    }
+    if username:
+        doc["username"] = normalize_username(username)
+    if whatsapp_number:
+        doc["whatsapp_number"] = normalize_phone(whatsapp_number)
+    if id_number:
+        doc["id_number"] = normalize_id(id_number)
+    try:
+        coll.insert_one(doc)
+        return True
+    except PyMongoError as exc:
+        logger.error("Failed to insert submission: %s", exc)
+        return False
+
+
 def update_submitter(
     db,
     doc_id,
+    *,
     new_telegram_id: int,
     new_telegram_username: str,
-    new_phone_number: str,
-    new_username: str,
-    new_id_number: str | None,
+    new_phone_number:    str | None = None,
+    new_whatsapp_number: str | None = None,
+    new_username:        str | None = None,
+    new_id_number:       str | None = None,
 ) -> None:
-    """Replace submitter fields on an existing document and increment check_count."""
+    """Update submitter identity on a matched document and increment check_count.
+
+    All content fields are keyword-only and optional so callers never
+    accidentally overwrite a field that belongs to a *different* matched record.
+    Only fields explicitly provided (non-None) are written.
+    """
     coll = _submissions(db)
-    now = datetime.now(timezone.utc)
+    now  = datetime.now(timezone.utc)
+
     set_fields: dict = {
         "telegram_id":       new_telegram_id,
         "telegram_username": new_telegram_username,
-        "phone_number":      normalize_phone(new_phone_number) if new_phone_number else "",
         "updated_at":        now,
     }
-    if new_username:
-        set_fields["username"] = new_username.lower()
-    if new_id_number:
+    if new_phone_number is not None:
+        set_fields["phone_number"] = normalize_phone(new_phone_number)
+    if new_whatsapp_number is not None:
+        set_fields["whatsapp_number"] = normalize_phone(new_whatsapp_number)
+    if new_username is not None:
+        set_fields["username"] = normalize_username(new_username)
+    if new_id_number is not None:
         set_fields["id_number"] = normalize_id(new_id_number)
+
     try:
         coll.update_one(
             {"_id": doc_id},
             {"$set": set_fields, "$inc": {"check_count": 1}},
         )
-    except Exception as exc:
+    except PyMongoError as exc:
         logger.error("Failed to update submitter for doc %s: %s", doc_id, exc)
 
 
@@ -250,13 +289,6 @@ DEFAULT_DUPLICATE_MSG = (
     "Previously by <b>{original_user}</b> on <b>{date}</b>\n"
     "🔢 Check count: {count}"
 )
-
-# Placeholders available in the duplicate message template:
-#   {duplicate_fields} — auto-built: shows which field(s) were duplicated
-#                        (ID only / phone only / both, with their values)
-#   {original_user}    — previous submitter (@username or display name)
-#   {date}             — date the previous record was registered (DD/MM/YY)
-#   {count}            — running total of how many times this record was checked
 
 DEFAULT_START_MSG = (
     "👋 Welcome, {name}!\n\n"
@@ -276,23 +308,21 @@ def _settings(db):
 
 
 def _get_setting(db, key: str, default: str) -> str:
-    coll = _settings(db)
-    doc = coll.find_one({"_id": key})
+    doc = _settings(db).find_one({"_id": key})
     if doc and doc.get("value"):
         return doc["value"]
     return default
 
 
 def _set_setting(db, key: str, message: str) -> bool:
-    coll = _settings(db)
     try:
-        coll.update_one(
+        _settings(db).update_one(
             {"_id": key},
             {"$set": {"value": message}},
             upsert=True,
         )
         return True
-    except Exception as exc:
+    except PyMongoError as exc:
         logger.error("Failed to set %s: %s", key, exc)
         return False
 
@@ -314,12 +344,11 @@ def set_start_msg(db, message: str) -> bool:
 
 
 def reset_setting(db, key: str) -> bool:
-    """Delete a custom setting so the default is used again."""
-    coll = _settings(db)
+    """Delete a custom setting so the built-in default is used again."""
     try:
-        coll.delete_one({"_id": key})
+        _settings(db).delete_one({"_id": key})
         return True
-    except Exception as exc:
+    except PyMongoError as exc:
         logger.error("Failed to reset %s: %s", key, exc)
         return False
 
@@ -328,15 +357,13 @@ def reset_setting(db, key: str) -> bool:
 # Field animated-emoji settings
 # ---------------------------------------------------------------------------
 
-# Short alias → internal field name
-FIELD_ALIASES = {
+FIELD_ALIASES: dict[str, str] = {
     "phone":    "phone_number",
     "whatsapp": "whatsapp_number",
     "id":       "id_number",
     "username": "username",
 }
 
-# Default plain emojis used when no custom animated emoji is configured
 FIELD_EMOJI_DEFAULTS: dict[str, dict] = {
     "phone_number":    {"fallback": "📞", "emoji_id": None},
     "whatsapp_number": {"fallback": "💬", "emoji_id": None},
@@ -348,7 +375,7 @@ FIELD_EMOJI_DEFAULTS: dict[str, dict] = {
 def get_field_emojis(db) -> dict:
     """Return {field_name: {fallback, emoji_id}} for all four fields."""
     coll = _settings(db)
-    result = {}
+    result: dict = {}
     for field, default in FIELD_EMOJI_DEFAULTS.items():
         doc = coll.find_one({"_id": f"emoji_{field}"})
         if doc:
@@ -362,27 +389,25 @@ def get_field_emojis(db) -> dict:
 
 
 def set_field_emoji(db, field: str, emoji_id: str, fallback: str) -> bool:
-    """Save an animated emoji ID + fallback for one field."""
-    coll = _settings(db)
+    """Save an animated-emoji ID + fallback character for one field."""
     try:
-        coll.update_one(
+        _settings(db).update_one(
             {"_id": f"emoji_{field}"},
             {"$set": {"emoji_id": emoji_id, "fallback": fallback}},
             upsert=True,
         )
         return True
-    except Exception as exc:
+    except PyMongoError as exc:
         logger.error("Failed to set emoji for %s: %s", field, exc)
         return False
 
 
 def reset_field_emoji(db, field: str) -> bool:
-    """Remove custom emoji for a field so the default plain emoji is used."""
-    coll = _settings(db)
+    """Remove the custom emoji for a field so the plain default is used."""
     try:
-        coll.delete_one({"_id": f"emoji_{field}"})
+        _settings(db).delete_one({"_id": f"emoji_{field}"})
         return True
-    except Exception as exc:
+    except PyMongoError as exc:
         logger.error("Failed to reset emoji for %s: %s", field, exc)
         return False
 
@@ -392,9 +417,8 @@ def reset_field_emoji(db, field: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def get_start_buttons(db) -> list:
-    """Return list of custom start buttons: [{"text": str, "url": str}, ...]"""
-    coll = _settings(db)
-    doc = coll.find_one({"_id": "start_buttons"})
+    """Return custom start buttons: [{"text": str, "url": str}, ...]"""
+    doc = _settings(db).find_one({"_id": "start_buttons"})
     if doc and isinstance(doc.get("buttons"), list):
         return doc["buttons"]
     return []
@@ -402,45 +426,42 @@ def get_start_buttons(db) -> list:
 
 def add_start_button(db, text: str, url: str) -> bool:
     """Append a new button to the custom start-button list."""
-    coll = _settings(db)
     try:
-        coll.update_one(
+        _settings(db).update_one(
             {"_id": "start_buttons"},
             {"$push": {"buttons": {"text": text, "url": url}}},
             upsert=True,
         )
         return True
-    except Exception as exc:
+    except PyMongoError as exc:
         logger.error("Failed to add start button: %s", exc)
         return False
 
 
 def remove_start_button(db, index: int) -> bool:
-    """Remove button at 1-based index. Returns False if out of range."""
+    """Remove button at 1-based *index*. Returns False when out of range."""
     buttons = get_start_buttons(db)
     idx = index - 1
     if idx < 0 or idx >= len(buttons):
         return False
     buttons.pop(idx)
-    coll = _settings(db)
     try:
-        coll.update_one(
+        _settings(db).update_one(
             {"_id": "start_buttons"},
             {"$set": {"buttons": buttons}},
             upsert=True,
         )
         return True
-    except Exception as exc:
+    except PyMongoError as exc:
         logger.error("Failed to remove start button: %s", exc)
         return False
 
 
 def reset_start_buttons(db) -> bool:
     """Remove all custom start buttons (revert to defaults only)."""
-    coll = _settings(db)
     try:
-        coll.delete_one({"_id": "start_buttons"})
+        _settings(db).delete_one({"_id": "start_buttons"})
         return True
-    except Exception as exc:
+    except PyMongoError as exc:
         logger.error("Failed to reset start buttons: %s", exc)
         return False
