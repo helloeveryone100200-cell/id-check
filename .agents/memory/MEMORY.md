@@ -1,1 +1,0 @@
-- [id-check codebase overview](id-check-codebase.md) — full breakdown of every file, data flow, bot logic, and all changes applied
