@@ -111,11 +111,12 @@ DEFAULT_MSGS: dict = {
 
 
 def _is_owner(user_id: int) -> bool:
-    """Bot owner = OWNER_ID env var, or first ADMIN_ID."""
-    env = os.getenv("OWNER_ID", "")
+    """Bot owner = OWNER_ID env var (single ID).
+    If OWNER_ID is not set, any ADMIN_ID can use /setmsg."""
+    env = os.getenv("OWNER_ID", "").strip()
     if env.isdigit():
         return user_id == int(env)
-    return bool(ADMIN_IDS) and user_id == ADMIN_IDS[0]
+    return user_id in ADMIN_IDS
 
 
 def _get_custom_msgs(bot_data: dict) -> dict:
