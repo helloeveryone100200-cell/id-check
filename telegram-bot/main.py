@@ -127,12 +127,7 @@ def get_msg(bot_data: dict, key: str, **fmt) -> str:
     """Return owner-customised message, falling back to DEFAULT_MSGS."""
     stored = _get_custom_msgs(bot_data).get(key, {})
     text = stored.get("text") or DEFAULT_MSGS.get(key, "")
-    if fmt and "{" in text:
-        try:
-            text = text.format(**fmt)
-        except (KeyError, ValueError):
-            pass
-    return text
+    return _safe_substitute(text, **fmt) if fmt else text
 
 
 async def _reply_custom(message, bot_data: dict, key: str,
@@ -275,23 +270,40 @@ async def setmsg_cancel_conv(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 
+def _safe_substitute(raw_text: str, **fmt) -> str:
+    """Replace only known {key} placeholders using regex — never raises.
+
+    Unknown or malformed {…} patterns are left intact, so animated emoji
+    and other literal braces in the text are preserved safely.
+    """
+    if not fmt or "{" not in raw_text:
+        return raw_text
+
+    def _replacer(m: re.Match) -> str:
+        key = m.group(1)
+        return str(fmt[key]) if key in fmt else m.group(0)
+
+    return re.sub(r'\{(\w+)\}', _replacer, raw_text)
+
+
 def _apply_fmt_and_adjust_entities(raw_text: str, entities_raw, **fmt) -> tuple:
-    """Apply str.format(**fmt) to raw_text and shift MessageEntity offsets accordingly.
+    """Apply safe placeholder substitution to raw_text and shift entity offsets.
 
     Returns (rendered_text, adjusted_entities_raw_list | None).
-    Works correctly even when multiple placeholders are present or when the
-    replacement strings are longer/shorter than the placeholder.
+    Uses _safe_substitute() instead of str.format() so unknown/malformed
+    {…} patterns (e.g. from animated emoji surroundings) never cause failures.
     """
     if not fmt or "{" not in raw_text:
         return raw_text, (list(entities_raw) if entities_raw else None)
 
-    try:
-        rendered = raw_text.format(**fmt)
-    except (KeyError, ValueError):
-        return raw_text, (list(entities_raw) if entities_raw else None)
+    rendered = _safe_substitute(raw_text, **fmt)
 
     if not entities_raw:
         return rendered, None
+
+    if rendered == raw_text:
+        # Nothing was replaced — offsets unchanged
+        return rendered, list(entities_raw)
 
     # Replay substitutions left-to-right, shifting offsets after each replacement.
     adjusted = [dict(e) for e in entities_raw]
@@ -309,11 +321,8 @@ def _apply_fmt_and_adjust_entities(raw_text: str, entities_raw, **fmt) -> tuple:
             if delta != 0:
                 end_ph = idx + len(placeholder)
                 for e in adjusted:
-                    e_off = e.get("offset", 0)
-                    if e_off >= end_ph:
-                        e["offset"] = e_off + delta
-                    # entities that start inside the placeholder are left as-is
-                    # (best-effort; such entities would be malformed input)
+                    if e.get("offset", 0) >= end_ph:
+                        e["offset"] = e["offset"] + delta
             working = working[:idx] + val_str + working[idx + len(placeholder):]
             search_from = idx + len(val_str)
 
