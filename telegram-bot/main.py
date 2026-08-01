@@ -130,6 +130,32 @@ def get_msg(bot_data: dict, key: str, **fmt) -> str:
     return _safe_substitute(text, **fmt) if fmt else text
 
 
+def _build_entities(entities_raw: list):
+    """Construct MessageEntity objects directly from stored dicts.
+
+    Uses the constructor (no bot reference needed) so custom_emoji
+    entities are built correctly without requiring a live Bot instance.
+    Handles both snake_case and camelCase dict keys produced by to_dict().
+    """
+    result = []
+    for e in entities_raw:
+        try:
+            result.append(MessageEntity(
+                type=e.get("type", ""),
+                offset=int(e.get("offset", 0)),
+                length=int(e.get("length", 0)),
+                url=e.get("url"),
+                language=e.get("language"),
+                # to_dict() may store as snake_case or camelCase
+                custom_emoji_id=(
+                    e.get("custom_emoji_id") or e.get("customEmojiId")
+                ),
+            ))
+        except Exception:
+            pass
+    return result or None
+
+
 async def _reply_custom(message, bot_data: dict, key: str,
                         reply_markup=None, parse_mode=None, **fmt):
     """Reply with a customisable message, preserving premium-emoji entities.
@@ -143,15 +169,7 @@ async def _reply_custom(message, bot_data: dict, key: str,
 
     text, adj_entities_raw = _apply_fmt_and_adjust_entities(raw_text, raw_entities, **fmt)
 
-    entities = None
-    if adj_entities_raw:
-        try:
-            entities = [MessageEntity.de_json(e, message.get_bot()) for e in adj_entities_raw]
-        except Exception:
-            try:
-                entities = [MessageEntity.de_json(e, None) for e in adj_entities_raw]
-            except Exception:
-                entities = None
+    entities = _build_entities(adj_entities_raw) if adj_entities_raw else None
 
     if entities:
         await message.reply_text(text, entities=entities, reply_markup=reply_markup)
@@ -342,17 +360,10 @@ async def _reply_custom_plus(message, bot_data: dict, count: int) -> None:
 
     text, adj_entities = _adjust_entities_for_count(template, entities_raw, count)
 
-    if adj_entities:
-        try:
-            entities = [MessageEntity.de_json(e, message.get_bot()) for e in adj_entities]
-        except Exception:
-            try:
-                entities = [MessageEntity.de_json(e, None) for e in adj_entities]
-            except Exception:
-                entities = None
-        if entities:
-            await message.reply_text(text, entities=entities)
-            return
+    entities = _build_entities(adj_entities) if adj_entities else None
+    if entities:
+        await message.reply_text(text, entities=entities)
+        return
     await message.reply_text(text)
 
 
