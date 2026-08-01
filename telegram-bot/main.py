@@ -24,7 +24,7 @@ from telegram.ext import (
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
     KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove,
-    InputFile, BotCommand
+    InputFile, BotCommand, MessageEntity
 )
 from telegram.ext import CallbackContext
 from web_server import keep_alive
@@ -53,6 +53,206 @@ SCHEDULE_SELECT_GROUP = 22
 BOT_SETTINGS_SELECT   = 40
 BOT_SETTINGS_AWAITING = 41
 BOT_SETTINGS_PHOTO    = 42
+
+SETMSG_SELECT = 60
+SETMSG_AWAIT  = 61
+
+
+# ============================================================
+# CUSTOM MESSAGES  (Owner-only /setmsg)
+# ============================================================
+
+CUSTOM_MSG_LABELS = {
+    "welcome":  "🏠 Welcome / Start Message",
+    "help":     "❓ Help Message",
+    "hidemenu": "🙈 Hide Menu Message",
+}
+
+DEFAULT_MSGS: dict = {
+    "welcome": (
+        "မင်္ဂလာပါ။ {name}\n"
+        "Bot အသုံးပြုနည်းသိအောင် /guide 📝 ကိုနှိပ်၍ကြည့်နိုင်ပါသည်။📌\n\n"
+        "🧮 Bot PM တွင် math expression ရိုက်ပါ (e.g. 2+2)"
+    ),
+    "help": (
+        "Bot commands:\n\n"
+        " /form - Report template\n"
+        " /showdata - Show today's data\n"
+        " /cleardata - Clear today's data\n"
+        " /total_plus - Plus counter\n"
+        " /reset_plus - Reset plus counter\n"
+        " /feedback - Send feedback to admin\n"
+        " /guide - Usage guide\n"
+        " /hidemenu - Hide menu\n\n"
+        "🧮 Math: Bot PM တွင် expression ရိုက်ပါ (e.g. 2+2)"
+    ),
+    "hidemenu": (
+        "Menu keyboard ကို ဖျက်လိုက်ပါပြီ။ /start ဖြင့် ပြန်ခေါ်နိုင်ပါသည်။😒"
+    ),
+}
+
+
+def _is_owner(user_id: int) -> bool:
+    """Bot owner = OWNER_ID env var, or first ADMIN_ID."""
+    env = os.getenv("OWNER_ID", "")
+    if env.isdigit():
+        return user_id == int(env)
+    return bool(ADMIN_IDS) and user_id == ADMIN_IDS[0]
+
+
+def _get_custom_msgs(bot_data: dict) -> dict:
+    return bot_data.setdefault("custom_msgs", {})
+
+
+def get_msg(bot_data: dict, key: str, **fmt) -> str:
+    """Return owner-customised message, falling back to DEFAULT_MSGS."""
+    stored = _get_custom_msgs(bot_data).get(key, {})
+    text = stored.get("text") or DEFAULT_MSGS.get(key, "")
+    if fmt and "{" in text:
+        try:
+            text = text.format(**fmt)
+        except (KeyError, ValueError):
+            pass
+    return text
+
+
+async def _reply_custom(message, bot_data: dict, key: str,
+                        reply_markup=None, parse_mode=None, **fmt):
+    """Reply with a customisable message, preserving premium-emoji entities."""
+    stored = _get_custom_msgs(bot_data).get(key, {})
+    raw_text = stored.get("text") or DEFAULT_MSGS.get(key, "")
+    raw_entities = stored.get("entities")
+
+    text = raw_text
+    if fmt and "{" in raw_text:
+        try:
+            text = raw_text.format(**fmt)
+        except (KeyError, ValueError):
+            pass
+
+    # Entity offsets are only valid when text wasn't changed by format()
+    entities = None
+    if raw_entities and raw_text == text:
+        try:
+            entities = [MessageEntity.de_json(e, None) for e in raw_entities]
+        except Exception:
+            entities = None
+
+    if entities:
+        await message.reply_text(text, entities=entities, reply_markup=reply_markup)
+    else:
+        await message.reply_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+
+
+# ─── /setmsg conversation handlers ───────────────────────────────────────────
+
+async def setmsg_start(update: Update, context: CallbackContext) -> int:
+    user = update.effective_user
+    if not user or not _is_owner(user.id):
+        await update.message.reply_text("❌ Bot owner သာ ဤ command ကို သုံးနိုင်သည်။")
+        return ConversationHandler.END
+    if update.effective_chat.type != "private":
+        await update.message.reply_text("❌ Bot PM ထဲတွင်သာ အသုံးပြုနိုင်သည်။")
+        return ConversationHandler.END
+
+    keyboard = [
+        [InlineKeyboardButton(label, callback_data=f"setmsg_{key}")]
+        for key, label in CUSTOM_MSG_LABELS.items()
+    ]
+    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="setmsg_cancel")])
+    await update.message.reply_text(
+        "✏️ ပြောင်းလဲလိုသော message ကို ရွေးပါ:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+    return SETMSG_SELECT
+
+
+async def setmsg_select(update: Update, context: CallbackContext) -> int:
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "setmsg_cancel":
+        await query.edit_message_text("❌ ဖျက်သိမ်းလိုက်ပါသည်။")
+        return ConversationHandler.END
+
+    key = data[len("setmsg_"):]
+    if key not in CUSTOM_MSG_LABELS:
+        await query.edit_message_text("❌ Invalid selection.")
+        return ConversationHandler.END
+
+    context.user_data["setmsg_key"] = key
+    label = CUSTOM_MSG_LABELS[key]
+    stored = _get_custom_msgs(context.application.bot_data).get(key, {})
+    current = stored.get("text") or DEFAULT_MSGS.get(key, "(default)")
+
+    await query.edit_message_text(
+        f"📝 <b>{label}</b>\n\n"
+        f"<b>လက်ရှိ message:</b>\n"
+        f"<blockquote>{current[:800]}</blockquote>\n\n"
+        "✏️ အသစ်ရိုက်ထည့်ပါ (Premium animated emoji ပါ တိုက်ရိုက်ထည့်နိုင်သည်)\n\n"
+        "<i>/reset — default ပြန်ထား</i>\n"
+        "<i>/cancel — ဖျက်သိမ်း</i>",
+        parse_mode="HTML"
+    )
+    return SETMSG_AWAIT
+
+
+async def setmsg_receive(update: Update, context: CallbackContext) -> int:
+    msg = update.message
+    text = msg.text or ""
+
+    if text.strip() in ("/cancel", "cancel"):
+        await msg.reply_text("❌ ဖျက်သိမ်းလိုက်ပါသည်။")
+        return ConversationHandler.END
+
+    key = context.user_data.get("setmsg_key")
+    if not key:
+        await msg.reply_text("❌ Session expired. /setmsg ထပ်စမ်းပါ။")
+        return ConversationHandler.END
+
+    if text.strip() == "/reset":
+        custom = _get_custom_msgs(context.application.bot_data)
+        custom.pop(key, None)
+        if context.application.persistence:
+            await context.application.persistence.flush()
+        label = CUSTOM_MSG_LABELS.get(key, key)
+        await msg.reply_text(
+            f"✅ <b>{label}</b> — default သို့ ပြန်သတ်မှတ်ပြီးပါပြီ။",
+            parse_mode="HTML"
+        )
+        return ConversationHandler.END
+
+    # Store text + entities (premium animated emoji entities preserved)
+    entities_raw = None
+    if msg.entities:
+        try:
+            entities_raw = [e.to_dict() for e in msg.entities]
+        except Exception:
+            entities_raw = None
+
+    custom = _get_custom_msgs(context.application.bot_data)
+    custom[key] = {"text": text, "entities": entities_raw}
+    if context.application.persistence:
+        await context.application.persistence.flush()
+
+    label = CUSTOM_MSG_LABELS.get(key, key)
+    emoji_note = " ✨ (Premium emoji သိမ်းဆည်းပြီး)" if entities_raw else ""
+    await msg.reply_text(
+        f"✅ <b>{label}</b> — သိမ်းဆည်းပြီးပါပြီ!{emoji_note}\n\n"
+        f"<blockquote>{text[:500]}</blockquote>",
+        parse_mode="HTML"
+    )
+    return ConversationHandler.END
+
+
+async def setmsg_cancel_conv(update: Update, context: CallbackContext) -> int:
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.edit_message_text("❌ ဖျက်သိမ်းလိုက်ပါသည်။")
+    elif update.message:
+        await update.message.reply_text("❌ ဖျက်သိမ်းလိုက်ပါသည်။")
+    return ConversationHandler.END
 
 
 # ============================================================
@@ -461,18 +661,7 @@ async def start(update: Update, context: CallbackContext) -> None:
 
 async def help_command(update: Update, context: CallbackContext) -> None:
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
-    await update.message.reply_text(
-        'Bot commands:\n\n'
-        ' /form - Report template\n'
-        ' /showdata - Show today\'s data\n'
-        ' /cleardata - Clear today\'s data\n'
-        ' /total_plus - Plus counter\n'
-        ' /reset_plus - Reset plus counter\n'
-        ' /feedback - Send feedback to admin\n'
-        ' /guide - Usage guide\n'
-        ' /hidemenu - Hide menu\n\n'
-        '🧮 Math: Bot PM တွင် expression ရိုက်ပါ (e.g. 2+2)'
-    )
+    await _reply_custom(update.message, context.application.bot_data, "help")
 
 
 async def report_form_command(update: Update, context: CallbackContext) -> None:
@@ -515,17 +704,15 @@ async def main_menu_command(update: Update, context: CallbackContext) -> None:
         inline_rows.append([InlineKeyboardButton(btn['text'], url=btn['url'])])
 
     inline_kb = InlineKeyboardMarkup(inline_rows)
-    await update.message.reply_text(
-        f"မင်္ဂလာပါ။ {user_name}\n"
-        "Bot အသုံးပြုနည်းသိအောင် /guide 📝 ကိုနှိပ်၍ကြည့်နိုင်ပါသည်။📌\n\n"
-        "🧮 Bot PM တွင် math expression ရိုက်ပါ (e.g. 2+2)",
-        reply_markup=inline_kb
+    await _reply_custom(
+        update.message, context.application.bot_data, "welcome",
+        reply_markup=inline_kb, name=user_name
     )
 
 async def remove_menu(update: Update, context: CallbackContext) -> None:
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
-    await update.message.reply_text(
-        "Menu keyboard ကို ဖျက်လိုက်ပါပြီ။ /start ဖြင့် ပြန်ခေါ်နိုင်ပါသည်။😒",
+    await _reply_custom(
+        update.message, context.application.bot_data, "hidemenu",
         reply_markup=ReplyKeyboardRemove()
     )
 
@@ -2327,6 +2514,27 @@ def main():
 
     application.add_handler(CallbackQueryHandler(admin_panel_callback, pattern='^adm_'))
 
+    # /setmsg — owner-only message customiser
+    setmsg_handler = ConversationHandler(
+        entry_points=[CommandHandler("setmsg", setmsg_start, filters=filters.ChatType.PRIVATE)],
+        states={
+            SETMSG_SELECT: [
+                CallbackQueryHandler(setmsg_select, pattern=r'^setmsg_'),
+            ],
+            SETMSG_AWAIT: [
+                CommandHandler("reset", setmsg_receive),
+                CommandHandler("cancel", setmsg_cancel_conv),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, setmsg_receive),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(setmsg_cancel_conv, pattern=r'^setmsg_cancel$'),
+            CommandHandler("cancel", setmsg_cancel_conv),
+        ],
+        allow_reentry=True,
+        per_message=False,
+    )
+    application.add_handler(setmsg_handler)
 
     feedback_handler = ConversationHandler(
         entry_points=[CommandHandler("feedback", start_feedback)],
