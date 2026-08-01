@@ -76,6 +76,7 @@ CUSTOM_MSG_LABELS = {
     "reset_plus_empty": "📊 /reset_plus — No counter message",
     "reset_plus_ok":    "✅ /reset_plus — Reset success message",
     "plus_fmt":         "➕ Plus count format  ({count} သုံးပါ)",
+    "digit_emoji":      "🔢 Animated number emoji (0→9 အစဉ်လိုက်)",
 }
 
 DEFAULT_MSGS: dict = {
@@ -107,6 +108,7 @@ DEFAULT_MSGS: dict = {
     "reset_plus_empty":  "📊 ဤ chat တွင် ရှင်လင်းစရာ Plus counter မရှိသေးပါ။",
     "reset_plus_ok":     "✅ Plus counter reset ပြုလုပ်ပြီးပါပြီ။\n🗑️ ဤ chat ရှိ အဖွဲ့ဝင် {count} ဦး၏ ကောင်တာများ ပြန်လည်သုညမှ စတင်ပြီ။",
     "plus_fmt":          "+{count}",
+    "digit_emoji":       "",   # empty = use plain digits
 }
 
 
@@ -218,6 +220,24 @@ async def setmsg_select(update: Update, context: CallbackContext) -> int:
     label = CUSTOM_MSG_LABELS[key]
     stored = _get_custom_msgs(context.application.bot_data).get(key, {})
     current = stored.get("text") or DEFAULT_MSGS.get(key, "(default)")
+
+    if key == "digit_emoji":
+        digit_map = _get_digit_map(context.application.bot_data)
+        if digit_map:
+            digits_preview = "".join(info["char"] for _, info in sorted(digit_map.items()))
+            status = f"<b>လက်ရှိ (0→9):</b> <blockquote>{digits_preview}</blockquote>"
+        else:
+            status = "<b>လက်ရှိ:</b> မသတ်မှတ်ရသေး (plain digits သုံးနေသည်)"
+        await query.edit_message_text(
+            f"🔢 <b>{label}</b>\n\n"
+            f"{status}\n\n"
+            "✏️ <b>Animated number emoji 0 မှ 9 ထိ</b> — အစဉ်လိုက် တစ်ကြောင်းတည်း ပို့ပါ\n"
+            "<i>ဥပမာ — Telegram emoji keyboard မှ</i> 0️⃣1️⃣2️⃣3️⃣4️⃣5️⃣6️⃣7️⃣8️⃣9️⃣\n\n"
+            "<i>/reset — plain digits ပြန်ထား</i>\n"
+            "<i>/cancel — ဖျက်သိမ်း</i>",
+            parse_mode="HTML"
+        )
+        return SETMSG_AWAIT
 
     await query.edit_message_text(
         f"📝 <b>{label}</b>\n\n"
@@ -352,19 +372,126 @@ def _adjust_entities_for_count(template: str, entities_raw, count: int) -> tuple
     return _apply_fmt_and_adjust_entities(template, entities_raw, count=count)
 
 
+def _utf16_len(s: str) -> int:
+    """UTF-16 code-unit length — the unit Telegram uses for entity offsets."""
+    return len(s.encode("utf-16-le")) // 2
+
+
+def _get_digit_map(bot_data: dict) -> dict:
+    """Parse stored digit_emoji data into {digit_str: {"char": ..., "cid": ...}}.
+
+    Expects the owner to have sent animated emoji in order 0–9 (10 emojis).
+    Entity order in the message = digit order.
+    """
+    stored = _get_custom_msgs(bot_data).get("digit_emoji", {})
+    if not stored:
+        return {}
+    text = stored.get("text", "")
+    raw_ents = stored.get("entities") or []
+    if not text or not raw_ents:
+        return {}
+
+    digit_ents = sorted(
+        [e for e in raw_ents if e.get("type") == "custom_emoji"],
+        key=lambda e: e.get("offset", 0),
+    )
+    if not digit_ents:
+        return {}
+
+    utf16_bytes = text.encode("utf-16-le")
+    digit_map: dict = {}
+    for i, ent in enumerate(digit_ents[:10]):
+        off   = ent.get("offset", 0) * 2
+        length = ent.get("length", 1) * 2
+        try:
+            char = utf16_bytes[off: off + length].decode("utf-16-le")
+        except Exception:
+            continue
+        cid = ent.get("custom_emoji_id") or ent.get("customEmojiId")
+        digit_map[str(i)] = {"char": char, "cid": cid}
+    return digit_map
+
+
+def _render_count(count: int, digit_map: dict) -> tuple:
+    """Convert an integer count to (text, entities_raw).
+
+    Uses animated emoji for each digit when digit_map is set.
+    Returned entity offsets are relative to the start of the returned text.
+    """
+    text = ""
+    entities_raw: list = []
+    for d in str(count):
+        info = digit_map.get(d)
+        if info and info.get("cid"):
+            off  = _utf16_len(text)
+            char = info["char"]
+            entities_raw.append({
+                "type": "custom_emoji",
+                "offset": off,
+                "length": _utf16_len(char),
+                "custom_emoji_id": info["cid"],
+            })
+            text += char
+        else:
+            text += d
+    return text, entities_raw
+
+
 async def _reply_custom_plus(message, bot_data: dict, count: int) -> None:
-    """Send the plus-count reply with animated-emoji entity support."""
-    stored = _get_custom_msgs(bot_data).get("plus_fmt", {})
+    """Send the plus-count reply with animated digits + template entity support."""
+    stored   = _get_custom_msgs(bot_data).get("plus_fmt", {})
     template = stored.get("text") or DEFAULT_MSGS["plus_fmt"]
-    entities_raw = stored.get("entities")
+    tmpl_ents_raw: list = stored.get("entities") or []
 
-    text, adj_entities = _adjust_entities_for_count(template, entities_raw, count)
+    digit_map              = _get_digit_map(bot_data)
+    count_text, count_ents = _render_count(count, digit_map)
 
-    entities = _build_entities(adj_entities) if adj_entities else None
+    placeholder = "{count}"
+    ph_str_idx  = template.find(placeholder)
+
+    if ph_str_idx == -1:
+        # No {count} in template — send as-is (no digit substitution)
+        entities = _build_entities(tmpl_ents_raw) if tmpl_ents_raw else None
+        if entities:
+            await message.reply_text(template, entities=entities)
+        else:
+            await message.reply_text(template)
+        return
+
+    prefix = template[:ph_str_idx]
+    suffix = template[ph_str_idx + len(placeholder):]
+    text   = prefix + count_text + suffix
+
+    # UTF-16 positions
+    prefix_u16    = _utf16_len(prefix)
+    ph_u16        = _utf16_len(placeholder)        # len("{count}") in UTF-16 units
+    count_u16     = _utf16_len(count_text)
+    delta         = count_u16 - ph_u16
+    suffix_u16_at = prefix_u16 + ph_u16            # where suffix began (before shift)
+
+    merged: list = []
+
+    # Template entities: shift those that start at/after the suffix boundary
+    for e in tmpl_ents_raw:
+        e2 = dict(e)
+        if e2.get("offset", 0) >= suffix_u16_at:
+            e2["offset"] = e2["offset"] + delta
+        merged.append(e2)
+
+    # Count digit entities: shift right by prefix UTF-16 length
+    for ce in count_ents:
+        ce2 = dict(ce)
+        ce2["offset"] = ce2.get("offset", 0) + prefix_u16
+        merged.append(ce2)
+
+    # Sort by offset
+    merged.sort(key=lambda e: e.get("offset", 0))
+
+    entities = _build_entities(merged) if merged else None
     if entities:
         await message.reply_text(text, entities=entities)
-        return
-    await message.reply_text(text)
+    else:
+        await message.reply_text(text)
 
 
 # ============================================================
