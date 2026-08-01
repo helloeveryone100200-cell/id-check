@@ -63,9 +63,19 @@ SETMSG_AWAIT  = 61
 # ============================================================
 
 CUSTOM_MSG_LABELS = {
-    "welcome":  "🏠 Welcome / Start Message",
-    "help":     "❓ Help Message",
-    "hidemenu": "🙈 Hide Menu Message",
+    "welcome":          "🏠 Welcome / Start Message",
+    "help":             "❓ Help Message",
+    "hidemenu":         "🙈 Hide Menu Message",
+    "form":             "📋 /form — Report template intro",
+    "cleardata_ok":     "✅ /cleardata — Data deleted message",
+    "cleardata_empty":  "📭 /cleardata — No data message",
+    "showdata_empty":   "📭 /showdata — No data message",
+    "showdata_footer":  "💬 /showdata — Footer hint",
+    "total_plus_empty": "📊 /total_plus — No data message",
+    "total_plus_footer":"💬 /total_plus — Footer hint",
+    "reset_plus_empty": "📊 /reset_plus — No counter message",
+    "reset_plus_ok":    "✅ /reset_plus — Reset success message",
+    "plus_fmt":         "➕ Plus count format  ({count} သုံးပါ)",
 }
 
 DEFAULT_MSGS: dict = {
@@ -86,9 +96,17 @@ DEFAULT_MSGS: dict = {
         " /hidemenu - Hide menu\n\n"
         "🧮 Math: Bot PM တွင် expression ရိုက်ပါ (e.g. 2+2)"
     ),
-    "hidemenu": (
-        "Menu keyboard ကို ဖျက်လိုက်ပါပြီ။ /start ဖြင့် ပြန်ခေါ်နိုင်ပါသည်။😒"
-    ),
+    "hidemenu":          "Menu keyboard ကို ဖျက်လိုက်ပါပြီ။ /start ဖြင့် ပြန်ခေါ်နိုင်ပါသည်။😒",
+    "form":              "📋 Deposit Report Form Template\n\nကော်ပီကူးယူ၍ ဖြည့်စွက်ပြီး ပို့ပေးပါ:\n\n",
+    "cleardata_ok":      "✅ Data deleted for today ({today}).\n✅ Plus counter reset ပြုလုပ်ပြီးပါပြီ။",
+    "cleardata_empty":   "No data found for today ({today}).",
+    "showdata_empty":    "No data collected yet for today ({today}) in this chat.",
+    "showdata_footer":   "{mention} report ပြင်ဆင်ပြီးပါက /cleardata နှိပ်ပါ။",
+    "total_plus_empty":  "📊 ဤ chat တွင် (+) reply မရှိသေးပါ။",
+    "total_plus_footer": "{mention} အလုပ်ဆင်းမည်ဆိုပါက /reset_plus နှိပ်ခဲ့ပါ",
+    "reset_plus_empty":  "📊 ဤ chat တွင် ရှင်လင်းစရာ Plus counter မရှိသေးပါ။",
+    "reset_plus_ok":     "✅ Plus counter reset ပြုလုပ်ပြီးပါပြီ။\n🗑️ ဤ chat ရှိ အဖွဲ့ဝင် {count} ဦး၏ ကောင်တာများ ပြန်လည်သုညမှ စတင်ပြီ။",
+    "plus_fmt":          "+{count}",
 }
 
 
@@ -253,6 +271,59 @@ async def setmsg_cancel_conv(update: Update, context: CallbackContext) -> int:
     elif update.message:
         await update.message.reply_text("❌ ဖျက်သိမ်းလိုက်ပါသည်။")
     return ConversationHandler.END
+
+
+def _adjust_entities_for_count(template: str, entities_raw: list, count: int) -> tuple:
+    """Replace {count} placeholder in template and shift entity offsets accordingly.
+
+    Returns (rendered_text, adjusted_entities_raw | None).
+    Entity offsets that fall after the placeholder are shifted by the
+    difference between len(str(count)) and len('{count}').
+    """
+    placeholder = "{count}"
+    count_str = str(count)
+    idx = template.find(placeholder)
+    if idx == -1:
+        return template, entities_raw or None
+
+    text = template[:idx] + count_str + template[idx + len(placeholder):]
+    if not entities_raw:
+        return text, None
+
+    delta = len(count_str) - len(placeholder)
+    adjusted = []
+    for e in entities_raw:
+        e2 = dict(e)
+        e_offset = e2.get("offset", 0)
+        e_length = e2.get("length", 0)
+        # Skip entities that overlap the placeholder (malformed input)
+        if e_offset < idx + len(placeholder) and e_offset + e_length > idx:
+            if e_offset <= idx:
+                adjusted.append(e2)   # starts before placeholder — keep as-is
+            # starts inside placeholder — drop it
+            continue
+        if e_offset >= idx + len(placeholder):
+            e2["offset"] = e_offset + delta
+        adjusted.append(e2)
+    return text, adjusted or None
+
+
+async def _reply_custom_plus(message, bot_data: dict, count: int) -> None:
+    """Send the plus-count reply with animated-emoji entity support."""
+    stored = _get_custom_msgs(bot_data).get("plus_fmt", {})
+    template = stored.get("text") or DEFAULT_MSGS["plus_fmt"]
+    entities_raw = stored.get("entities")
+
+    text, adj_entities = _adjust_entities_for_count(template, entities_raw, count)
+
+    if adj_entities:
+        try:
+            entities = [MessageEntity.de_json(e, None) for e in adj_entities]
+            await message.reply_text(text, entities=entities)
+            return
+        except Exception:
+            pass
+    await message.reply_text(text)
 
 
 # ============================================================
@@ -666,11 +737,8 @@ async def help_command(update: Update, context: CallbackContext) -> None:
 
 async def report_form_command(update: Update, context: CallbackContext) -> None:
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
-    await update.message.reply_text(
-        "📋 Deposit Report Form Template\n\n"
-        "ကော်ပီကူးယူ၍ ဖြည့်စွက်ပြီး ပို့ပေးပါ:\n\n"
-        + REPORT_TEMPLATE
-    )
+    intro = get_msg(context.application.bot_data, "form")
+    await update.message.reply_text(intro + REPORT_TEMPLATE)
 
 
 async def main_menu_command(update: Update, context: CallbackContext) -> None:
@@ -870,12 +938,11 @@ async def clear_data(update: Update, context: CallbackContext) -> None:
             del data_msg_map[k]
         save_data_msg_map()
 
-        await update.message.reply_text(
-            f"✅ Data deleted for today ({today_key}).\n"
-            f"✅ Plus counter reset ပြုလုပ်ပြီးပါပြီ။"
-        )
+        await _reply_custom(update.message, context.application.bot_data,
+                            "cleardata_ok", today=today_key)
     else:
-        await update.message.reply_text(f"No data found for today ({today_key}).")
+        await _reply_custom(update.message, context.application.bot_data,
+                            "cleardata_empty", today=today_key)
 
 
 async def admin_clearall_command(update: Update, context: CallbackContext) -> None:
@@ -1019,7 +1086,8 @@ async def show_data(update: Update, context: CallbackContext) -> None:
         collected_data_list = context.application.bot_data.get('group_data', {}).get(chat_id, {}).get(today_key, [])
 
     if not collected_data_list:
-        await update.message.reply_text(f"No data collected yet for today ({today_key}) in this chat.")
+        await _reply_custom(update.message, context.application.bot_data,
+                            "showdata_empty", today=today_key)
         return
 
     grouped_data: dict = {}
@@ -1046,10 +1114,8 @@ async def show_data(update: Update, context: CallbackContext) -> None:
 
     _u = update.effective_user
     _mention = f"@{_u.username}" if (_u and _u.username) else (_u.full_name if _u else "User")
-    await update.message.reply_text(
-        f"<i>{_mention} report ပြင်ဆင်ပြီးပါက /cleardata နှိပ်ပါ။</i>",
-        parse_mode='HTML'
-    )
+    await _reply_custom(update.message, context.application.bot_data,
+                        "showdata_footer", parse_mode='HTML', mention=_mention)
 
 
 async def extract_and_save_data(update: Update, context: CallbackContext) -> None:
@@ -2075,7 +2141,7 @@ async def handle_plus_reply(update: Update, context: CallbackContext) -> None:
     count = plus_counters[count_key]
     plus_counted_msgs[msg_key] = {"count": count, "sender_id": sender_id}
     save_plus_data()
-    await original.reply_text(f"+{count}")
+    await _reply_custom_plus(original, context.application.bot_data, count)
 
 
 async def handle_minus_reply(update: Update, context: CallbackContext) -> None:
@@ -2129,7 +2195,7 @@ async def total_plus_command(update: Update, context: CallbackContext) -> None:
     chat_entries = {uid: cnt for (cid, uid), cnt in plus_counters.items() if cid == current_chat}
 
     if not chat_entries:
-        await update.message.reply_text("📊 ဤ chat တွင် (+) reply မရှိသေးပါ။")
+        await _reply_custom(update.message, context.application.bot_data, "total_plus_empty")
         return
 
     lines = []
@@ -2145,10 +2211,8 @@ async def total_plus_command(update: Update, context: CallbackContext) -> None:
     )
     _u = update.effective_user
     _mention = f"@{_u.username}" if (_u and _u.username) else (_u.full_name if _u else "User")
-    await update.message.reply_text(
-        f"<i>{_mention} အလုပ်ဆင်းမည်ဆိုပါက /reset_plus နှိပ်ခဲ့ပါ</i>",
-        parse_mode='HTML'
-    )
+    await _reply_custom(update.message, context.application.bot_data,
+                        "total_plus_footer", parse_mode='HTML', mention=_mention)
 
 
 async def reset_plus_command(update: Update, context: CallbackContext) -> None:
@@ -2157,7 +2221,7 @@ async def reset_plus_command(update: Update, context: CallbackContext) -> None:
     keys_to_del = [k for k in plus_counters if k[0] == current_chat]
 
     if not keys_to_del:
-        await update.message.reply_text("📊 ဤ chat တွင် ရှင်လင်းစရာ Plus counter မရှိသေးပါ။")
+        await _reply_custom(update.message, context.application.bot_data, "reset_plus_empty")
         return
 
     for k in keys_to_del:
@@ -2166,10 +2230,8 @@ async def reset_plus_command(update: Update, context: CallbackContext) -> None:
         del plus_counted_msgs[k]
     save_plus_data()
 
-    await update.message.reply_text(
-        f"✅ Plus counter reset ပြုလုပ်ပြီးပါပြီ။\n"
-        f"🗑️ ဤ chat ရှိ အဖွဲ့ဝင် {len(keys_to_del)} ဦး၏ ကောင်တာများ ပြန်လည်သုညမှ စတင်ပြီ။"
-    )
+    await _reply_custom(update.message, context.application.bot_data,
+                        "reset_plus_ok", count=len(keys_to_del))
 
 
 # ============================================================
