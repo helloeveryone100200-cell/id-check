@@ -137,25 +137,26 @@ def get_msg(bot_data: dict, key: str, **fmt) -> str:
 
 async def _reply_custom(message, bot_data: dict, key: str,
                         reply_markup=None, parse_mode=None, **fmt):
-    """Reply with a customisable message, preserving premium-emoji entities."""
+    """Reply with a customisable message, preserving premium-emoji entities.
+
+    Entity offsets are adjusted automatically when format placeholders
+    (e.g. {today}, {name}) change the text length.
+    """
     stored = _get_custom_msgs(bot_data).get(key, {})
     raw_text = stored.get("text") or DEFAULT_MSGS.get(key, "")
     raw_entities = stored.get("entities")
 
-    text = raw_text
-    if fmt and "{" in raw_text:
-        try:
-            text = raw_text.format(**fmt)
-        except (KeyError, ValueError):
-            pass
+    text, adj_entities_raw = _apply_fmt_and_adjust_entities(raw_text, raw_entities, **fmt)
 
-    # Entity offsets are only valid when text wasn't changed by format()
     entities = None
-    if raw_entities and raw_text == text:
+    if adj_entities_raw:
         try:
-            entities = [MessageEntity.de_json(e, None) for e in raw_entities]
+            entities = [MessageEntity.de_json(e, message.get_bot()) for e in adj_entities_raw]
         except Exception:
-            entities = None
+            try:
+                entities = [MessageEntity.de_json(e, None) for e in adj_entities_raw]
+            except Exception:
+                entities = None
 
     if entities:
         await message.reply_text(text, entities=entities, reply_markup=reply_markup)
@@ -274,39 +275,54 @@ async def setmsg_cancel_conv(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 
-def _adjust_entities_for_count(template: str, entities_raw: list, count: int) -> tuple:
-    """Replace {count} placeholder in template and shift entity offsets accordingly.
+def _apply_fmt_and_adjust_entities(raw_text: str, entities_raw, **fmt) -> tuple:
+    """Apply str.format(**fmt) to raw_text and shift MessageEntity offsets accordingly.
 
-    Returns (rendered_text, adjusted_entities_raw | None).
-    Entity offsets that fall after the placeholder are shifted by the
-    difference between len(str(count)) and len('{count}').
+    Returns (rendered_text, adjusted_entities_raw_list | None).
+    Works correctly even when multiple placeholders are present or when the
+    replacement strings are longer/shorter than the placeholder.
     """
-    placeholder = "{count}"
-    count_str = str(count)
-    idx = template.find(placeholder)
-    if idx == -1:
-        return template, entities_raw or None
+    if not fmt or "{" not in raw_text:
+        return raw_text, (list(entities_raw) if entities_raw else None)
 
-    text = template[:idx] + count_str + template[idx + len(placeholder):]
+    try:
+        rendered = raw_text.format(**fmt)
+    except (KeyError, ValueError):
+        return raw_text, (list(entities_raw) if entities_raw else None)
+
     if not entities_raw:
-        return text, None
+        return rendered, None
 
-    delta = len(count_str) - len(placeholder)
-    adjusted = []
-    for e in entities_raw:
-        e2 = dict(e)
-        e_offset = e2.get("offset", 0)
-        e_length = e2.get("length", 0)
-        # Skip entities that overlap the placeholder (malformed input)
-        if e_offset < idx + len(placeholder) and e_offset + e_length > idx:
-            if e_offset <= idx:
-                adjusted.append(e2)   # starts before placeholder — keep as-is
-            # starts inside placeholder — drop it
-            continue
-        if e_offset >= idx + len(placeholder):
-            e2["offset"] = e_offset + delta
-        adjusted.append(e2)
-    return text, adjusted or None
+    # Replay substitutions left-to-right, shifting offsets after each replacement.
+    adjusted = [dict(e) for e in entities_raw]
+    working = raw_text
+
+    for key, val in fmt.items():
+        placeholder = "{" + key + "}"
+        val_str = str(val)
+        delta = len(val_str) - len(placeholder)
+        search_from = 0
+        while True:
+            idx = working.find(placeholder, search_from)
+            if idx == -1:
+                break
+            if delta != 0:
+                end_ph = idx + len(placeholder)
+                for e in adjusted:
+                    e_off = e.get("offset", 0)
+                    if e_off >= end_ph:
+                        e["offset"] = e_off + delta
+                    # entities that start inside the placeholder are left as-is
+                    # (best-effort; such entities would be malformed input)
+            working = working[:idx] + val_str + working[idx + len(placeholder):]
+            search_from = idx + len(val_str)
+
+    return rendered, adjusted or None
+
+
+def _adjust_entities_for_count(template: str, entities_raw, count: int) -> tuple:
+    """Convenience wrapper around _apply_fmt_and_adjust_entities for {count}."""
+    return _apply_fmt_and_adjust_entities(template, entities_raw, count=count)
 
 
 async def _reply_custom_plus(message, bot_data: dict, count: int) -> None:
@@ -319,11 +335,15 @@ async def _reply_custom_plus(message, bot_data: dict, count: int) -> None:
 
     if adj_entities:
         try:
-            entities = [MessageEntity.de_json(e, None) for e in adj_entities]
+            entities = [MessageEntity.de_json(e, message.get_bot()) for e in adj_entities]
+        except Exception:
+            try:
+                entities = [MessageEntity.de_json(e, None) for e in adj_entities]
+            except Exception:
+                entities = None
+        if entities:
             await message.reply_text(text, entities=entities)
             return
-        except Exception:
-            pass
     await message.reply_text(text)
 
 
