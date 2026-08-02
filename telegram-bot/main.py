@@ -77,6 +77,15 @@ CUSTOM_MSG_LABELS = {
     "reset_plus_ok":    "✅ /reset_plus — Reset success message",
     "plus_fmt":         "➕ Plus count format  ({count} သုံးပါ)",
     "digit_emoji":      "🔢 Animated number emoji (0→9 အစဉ်လိုက်)",
+    # Plus / minus reply messages
+    "plus_already":     "⚠️ Already counted reply",
+    "minus_not_data":   "⚠️ Not deposit/plus data warning",
+    "minus_del_entry":  "🗑️ Deposit entry deleted msg  ({entry} သုံးနိုင်)",
+    "minus_del_plus":   "🗑️ Plus count removed msg  ({given_count} animated)",
+    # Total plus display
+    "total_plus_header":"📊 Plus counter header",
+    "total_plus_row":   "📝 Counter row  ({i} {name} {count} animated)",
+    "total_plus_grand": "🔢 Counter total line  ({grand_total} animated)",
 }
 
 DEFAULT_MSGS: dict = {
@@ -109,6 +118,15 @@ DEFAULT_MSGS: dict = {
     "reset_plus_ok":     "✅ Plus counter reset ပြုလုပ်ပြီးပါပြီ။\n🗑️ ဤ chat ရှိ အဖွဲ့ဝင် {count} ဦး၏ ကောင်တာများ ပြန်လည်သုညမှ စတင်ပြီ။",
     "plus_fmt":          "+{count}",
     "digit_emoji":       "",   # empty = use plain digits
+    # Plus / minus reply messages
+    "plus_already":      "⚠️ ဤ message အား (+) ပေးပြီးပြီ ဖြစ်ပါသည်။ (+{given_count})",
+    "minus_not_data":    "⚠️ ဤ message သည် Deposit data (သို့) (+) မဟုတ်ပါ။",
+    "minus_del_entry":   "🗑️ ပယ်ဖျက်လိုက်ပါသည်:\n{entry}",
+    "minus_del_plus":    "🗑️ +{given_count} ကို ပယ်ဖျက်လိုက်ပါသည်။",
+    # Total plus display
+    "total_plus_header": "📊 Plus Counter",
+    "total_plus_row":    "  {i}. {name} → +{count}",
+    "total_plus_grand":  "Total = {grand_total}",
 }
 
 
@@ -488,6 +506,134 @@ async def _reply_custom_plus(message, bot_data: dict, count: int) -> None:
     merged.sort(key=lambda e: e.get("offset", 0))
 
     entities = _build_entities(merged) if merged else None
+    if entities:
+        await message.reply_text(text, entities=entities)
+    else:
+        await message.reply_text(text)
+
+
+# ─── Animated-count helpers ──────────────────────────────────────────────────
+
+def _insert_animated_count(template: str, count_val: int, count_key: str,
+                            digit_map: dict) -> tuple:
+    """Replace {count_key} in template with animated digit text.
+
+    Returns (final_text, entities_raw) with offsets relative to start of text.
+    """
+    count_text, count_ents_raw = _render_count(count_val, digit_map)
+    placeholder = "{" + count_key + "}"
+    ph_idx = template.find(placeholder)
+    if ph_idx == -1:
+        return template, []
+    prefix   = template[:ph_idx]
+    suffix   = template[ph_idx + len(placeholder):]
+    final    = prefix + count_text + suffix
+    base_u16 = _utf16_len(prefix)
+    shifted  = [{**e, "offset": e.get("offset", 0) + base_u16} for e in count_ents_raw]
+    return final, shifted
+
+
+async def _reply_custom_animated(message, bot_data: dict, key: str,
+                                  animated_counts: dict = None,
+                                  reply_markup=None, **other_fmt):
+    """Reply with a customisable message, substituting {key} placeholders with
+    animated digits for each entry in animated_counts={placeholder: int_value}.
+
+    Non-count placeholders in other_fmt are substituted first with entity-offset
+    adjustment; then each animated count placeholder is replaced using _render_count.
+    """
+    stored     = _get_custom_msgs(bot_data).get(key, {})
+    raw_text   = stored.get("text") or DEFAULT_MSGS.get(key, "")
+    raw_ents   = stored.get("entities") or []
+    digit_map  = _get_digit_map(bot_data)
+
+    # Step 1: substitute non-count placeholders (adjusts entity offsets)
+    text, working_ents = _apply_fmt_and_adjust_entities(raw_text, raw_ents, **other_fmt)
+    working_ents = list(working_ents or [])
+
+    # Step 2: substitute each animated-count placeholder
+    for count_key, count_val in (animated_counts or {}).items():
+        placeholder = "{" + count_key + "}"
+        ph_idx = text.find(placeholder)
+        if ph_idx == -1:
+            continue
+        count_text, count_ents_raw = _render_count(count_val, digit_map)
+        prefix     = text[:ph_idx]
+        suffix     = text[ph_idx + len(placeholder):]
+        prefix_u16 = _utf16_len(prefix)
+        ph_u16     = _utf16_len(placeholder)
+        count_u16  = _utf16_len(count_text)
+        delta      = count_u16 - ph_u16
+        sfx_start  = prefix_u16 + ph_u16
+
+        new_ents = []
+        for e in working_ents:
+            e2 = dict(e)
+            if e2.get("offset", 0) >= sfx_start:
+                e2["offset"] = e2["offset"] + delta
+            new_ents.append(e2)
+        for ce in count_ents_raw:
+            new_ents.append({**ce, "offset": ce.get("offset", 0) + prefix_u16})
+        new_ents.sort(key=lambda e: e.get("offset", 0))
+        working_ents = new_ents
+        text = prefix + count_text + suffix
+
+    entities = _build_entities(working_ents) if working_ents else None
+    if entities:
+        await message.reply_text(text, entities=entities, reply_markup=reply_markup)
+    else:
+        await message.reply_text(text, reply_markup=reply_markup)
+
+
+async def _send_total_plus(message, bot_data: dict,
+                            entries: dict, grand_total: int, names: dict) -> None:
+    """Build and send the complete total-plus counter as a single message.
+
+    Header, row format, and total line are all customisable; counts inside
+    rows and the grand total use animated digits when digit_map is set.
+    """
+    digit_map = _get_digit_map(bot_data)
+
+    hdr_stored   = _get_custom_msgs(bot_data).get("total_plus_header", {})
+    hdr_text     = hdr_stored.get("text") or DEFAULT_MSGS["total_plus_header"]
+    hdr_ents_raw = list(hdr_stored.get("entities") or [])
+    row_tmpl     = get_msg(bot_data, "total_plus_row")    # {i}, {name}, {count}
+    grand_tmpl   = get_msg(bot_data, "total_plus_grand")  # {grand_total}
+
+    text: str    = ""
+    all_ents: list = []
+
+    def _push(chunk: str, chunk_ents=None):
+        nonlocal text
+        base = _utf16_len(text)
+        if chunk_ents:
+            for e in chunk_ents:
+                all_ents.append({**dict(e), "offset": e.get("offset", 0) + base})
+        text += chunk
+
+    def _push_count(tmpl: str, count_key: str, count_val: int, **pre_fmt):
+        """Substitute pre_fmt then replace {count_key} with animated digits."""
+        pre = _safe_substitute(tmpl, **pre_fmt)
+        chunk, chunk_ents = _insert_animated_count(pre, count_val, count_key, digit_map)
+        _push(chunk, chunk_ents)
+
+    # --- Header ---
+    _push(hdr_text, hdr_ents_raw)
+    _push("\n\n")
+
+    # --- Rows ---
+    items = list(entries.items())
+    for j, (uid, cnt) in enumerate(items, 1):
+        name = names.get(uid, str(uid))
+        _push_count(row_tmpl, "count", cnt, i=j, name=name)
+        if j < len(items):
+            _push("\n")
+
+    # --- Grand total ---
+    _push("\n\n")
+    _push_count(grand_tmpl, "grand_total", grand_total)
+
+    entities = _build_entities(all_ents) if all_ents else None
     if entities:
         await message.reply_text(text, entities=entities)
     else:
@@ -2301,7 +2447,10 @@ async def handle_plus_reply(update: Update, context: CallbackContext) -> None:
 
     if msg_key in plus_counted_msgs:
         given_count = plus_counted_msgs[msg_key]["count"]
-        await original.reply_text(f"⚠️ ဤ message အား (+) ပေးပြီးပြီ ဖြစ်ပါသည်။ (+{given_count})")
+        await _reply_custom_animated(
+            original, context.application.bot_data, "plus_already",
+            animated_counts={"given_count": given_count},
+        )
         return
 
     plus_names[sender_id] = sender.full_name or sender.username or str(sender_id)
@@ -2341,11 +2490,12 @@ async def handle_minus_reply(update: Update, context: CallbackContext) -> None:
                 await context.application.persistence.flush()
 
         save_data_msg_map()
-        await original.reply_text(f"🗑️ ပယ်ဖျက်လိုက်ပါသည်:\n`{entry}`", parse_mode='Markdown')
+        await _reply_custom(original, context.application.bot_data,
+                            "minus_del_entry", entry=entry)
         return
 
     if msg_key not in plus_counted_msgs:
-        await original.reply_text("⚠️ ဤ message သည် Deposit data (သို့) (+) မဟုတ်ပါ။")
+        await _reply_custom(original, context.application.bot_data, "minus_not_data")
         return
 
     record = plus_counted_msgs.pop(msg_key)
@@ -2355,7 +2505,10 @@ async def handle_minus_reply(update: Update, context: CallbackContext) -> None:
     if count_key in plus_counters and plus_counters[count_key] > 0:
         plus_counters[count_key] -= 1
     save_plus_data()
-    await original.reply_text(f"🗑️ +{given_count} ကို ပယ်ဖျက်လိုက်ပါသည်။")
+    await _reply_custom_animated(
+        original, context.application.bot_data, "minus_del_plus",
+        animated_counts={"given_count": given_count},
+    )
 
 
 async def total_plus_command(update: Update, context: CallbackContext) -> None:
@@ -2366,16 +2519,10 @@ async def total_plus_command(update: Update, context: CallbackContext) -> None:
         await _reply_custom(update.message, context.application.bot_data, "total_plus_empty")
         return
 
-    lines = []
-    grand_total = 0
-    for i, (uid, cnt) in enumerate(chat_entries.items(), 1):
-        grand_total += cnt
-        name = plus_names.get(uid, str(uid))
-        lines.append(f"  {i}. {name} → +{cnt}")
-
-    await update.message.reply_text(
-        f"📊 <b>Plus Counter</b>\n\n" + "\n".join(lines) + f"\n\n<b>Total = {grand_total}</b>",
-        parse_mode='HTML'
+    grand_total = sum(chat_entries.values())
+    await _send_total_plus(
+        update.message, context.application.bot_data,
+        chat_entries, grand_total, plus_names,
     )
     _u = update.effective_user
     _mention = f"@{_u.username}" if (_u and _u.username) else (_u.full_name if _u else "User")
