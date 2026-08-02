@@ -287,6 +287,7 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
         custom.pop(key, None)
         if context.application.persistence:
             await context.application.persistence.flush()
+        save_bot_config_to_mongo(context.application.bot_data)
         label = CUSTOM_MSG_LABELS.get(key, key)
         await msg.reply_text(
             f"✅ <b>{label}</b> — default သို့ ပြန်သတ်မှတ်ပြီးပါပြီ။",
@@ -306,6 +307,7 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
     custom[key] = {"text": text, "entities": entities_raw}
     if context.application.persistence:
         await context.application.persistence.flush()
+    save_bot_config_to_mongo(context.application.bot_data)
 
     label = CUSTOM_MSG_LABELS.get(key, key)
     emoji_note = " ✨ (Premium emoji သိမ်းဆည်းပြီး)" if entities_raw else ""
@@ -755,6 +757,47 @@ def _str_to_data_key(s: str) -> tuple:
     return (int(parts[0]), int(parts[1]))
 
 
+# ============================================================
+# BOT CONFIG  (custom_msgs + start_buttons → MongoDB)
+# ============================================================
+
+def save_bot_config_to_mongo(bot_data: dict) -> None:
+    """Persist custom_msgs and start_buttons to MongoDB bot_config collection."""
+    db = get_mongo_db()
+    if db is None:
+        return
+    try:
+        payload = {
+            "_id":          "bot_config",
+            "custom_msgs":  bot_data.get("custom_msgs", {}),
+            "start_buttons": bot_data.get("start_buttons", []),
+        }
+        db["bot_config"].replace_one({"_id": "bot_config"}, payload, upsert=True)
+        logging.info("bot_config saved to MongoDB")
+    except PyMongoError as e:
+        logging.warning(f"MongoDB save_bot_config error: {e}")
+
+
+def load_bot_config_from_mongo(bot_data: dict) -> None:
+    """Restore custom_msgs and start_buttons from MongoDB into bot_data (in-place)."""
+    db = get_mongo_db()
+    if db is None:
+        return
+    try:
+        doc = db["bot_config"].find_one({"_id": "bot_config"})
+        if doc:
+            if "custom_msgs" in doc:
+                bot_data["custom_msgs"] = doc["custom_msgs"]
+                logging.info(f"bot_config: restored {len(doc['custom_msgs'])} custom_msgs from MongoDB")
+            if "start_buttons" in doc:
+                bot_data["start_buttons"] = doc["start_buttons"]
+                logging.info(f"bot_config: restored {len(doc['start_buttons'])} start_buttons from MongoDB")
+        else:
+            logging.info("bot_config: no saved config in MongoDB (first run)")
+    except PyMongoError as e:
+        logging.warning(f"MongoDB load_bot_config error: {e}")
+
+
 def save_data_msg_map() -> None:
     serializable = {_data_key_to_str(k): v for k, v in data_msg_map.items()}
     # MongoDB save
@@ -1078,6 +1121,7 @@ async def main_menu_command(update: Update, context: CallbackContext) -> None:
         ]
         if context.application.persistence:
             await context.application.persistence.flush()
+        save_bot_config_to_mongo(context.application.bot_data)
 
     inline_rows = [
         [InlineKeyboardButton("➕ Add me to your chat!", url=f"https://t.me/{bot_username}?startgroup=true")],
@@ -1135,6 +1179,7 @@ async def addbutton_command(update: Update, context: CallbackContext) -> None:
     buttons.append({"text": text, "url": url})
     if context.application.persistence:
         await context.application.persistence.flush()
+    save_bot_config_to_mongo(context.application.bot_data)
 
     await update.message.reply_text(
         f"✅ Button ထည့်ပြီးပါပြီ!\n\n"
@@ -1192,6 +1237,7 @@ async def removebutton_callback(update: Update, context: CallbackContext) -> Non
     removed = buttons.pop(idx)
     if context.application.persistence:
         await context.application.persistence.flush()
+    save_bot_config_to_mongo(context.application.bot_data)
 
     await query.edit_message_text(
         f"✅ Button ဖျက်ပြီးပါပြီ!\n\n🗑 <b>{removed['text']}</b>\n🔗 {removed['url']}\n\n"
@@ -2737,6 +2783,8 @@ async def auto_clear_job(context: CallbackContext) -> None:
 # ============================================================
 
 async def post_init(application: Application) -> None:
+    # Restore custom_msgs + start_buttons from MongoDB (survives restarts/redeploys)
+    load_bot_config_from_mongo(application.bot_data)
     restore_schedules(application)
     tz = get_yangon_tz()
     application.job_queue.run_daily(
