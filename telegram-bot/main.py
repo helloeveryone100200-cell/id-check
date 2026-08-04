@@ -2592,10 +2592,10 @@ async def handle_daqiang_reply(update: Update, context: CallbackContext) -> None
     if not username_value or username_value in ('-', '–', '—'):
         return
 
-    # Build sender mention (@username preferred, full name as fallback)
-    sender = msg.from_user
-    if sender:
-        sender_mention = f"@{sender.username}" if sender.username else (sender.full_name or "User")
+    # Build sender mention from the ORIGINAL message's author (report owner)
+    original_sender = original.from_user
+    if original_sender:
+        sender_mention = f"@{original_sender.username}" if original_sender.username else (original_sender.full_name or "User")
     else:
         sender_mention = "User"
 
