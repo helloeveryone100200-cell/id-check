@@ -2578,14 +2578,13 @@ async def handle_daqiang_reply(update: Update, context: CallbackContext) -> None
     if not original_text:
         return
 
-    # Extract Username field (handles "Username - value", "Username: value", "Username — value")
+    # Extract Gmail field (handles "Gmail - value", "gmail: value", "Gmail — value")
     username_match = re.search(
-        r'Username\s*[-–—：:]\s*(.+?)(?:\n|$)',
+        r'[Gg]mail\s*[-–—：:]\s*(.+?)(?:\n|$)',
         original_text,
-        re.IGNORECASE,
     )
     if not username_match:
-        # No Username field in the quoted message — silently ignore
+        # No Gmail field in the quoted message — silently ignore
         return
 
     username_value = username_match.group(1).strip()
