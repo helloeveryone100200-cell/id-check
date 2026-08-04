@@ -86,6 +86,8 @@ CUSTOM_MSG_LABELS = {
     "total_plus_header":"📊 Plus counter header",
     "total_plus_row":   "📝 Counter row  ({i} {name} {count} animated)",
     "total_plus_grand": "🔢 Counter total line  ({grand_total} animated)",
+    # 打枪 / သာချန်း reply
+    "daqiang_reply":    "🎯 打枪/သာချန်း reply ({username_value} နှင့် {sender_mention} သုံးနိုင်)",
 }
 
 DEFAULT_MSGS: dict = {
@@ -127,6 +129,8 @@ DEFAULT_MSGS: dict = {
     "total_plus_header": "📊 Plus Counter",
     "total_plus_row":    "  {i}. {name} → +{count}",
     "total_plus_grand":  "Total = {grand_total}",
+    # 打枪 / သာချန်း reply
+    "daqiang_reply":     "{username_value}\n\n{sender_mention} ဒီ client ကို သင့်ဘက်မှာ မှတ်သားထားဖို့ မမေ့ပါနဲ့",
 }
 
 
@@ -2557,6 +2561,53 @@ async def handle_minus_reply(update: Update, context: CallbackContext) -> None:
     )
 
 
+async def handle_daqiang_reply(update: Update, context: CallbackContext) -> None:
+    """Reply to '打枪' or 'သာချန်း' with the Username field from the quoted message.
+
+    Trigger : any REPLY message whose text is exactly '打枪' or 'သာချန်း'.
+    Action  : extract 'Username - <value>' from the replied-to message and send
+              a customisable reply (supports animated emoji, stored in MongoDB
+              via the existing /setmsg → save_bot_config_to_mongo flow).
+    """
+    msg = update.message
+    if not msg or not msg.reply_to_message:
+        return
+
+    original = msg.reply_to_message
+    original_text = (original.text or original.caption or '').strip()
+    if not original_text:
+        return
+
+    # Extract Username field (handles "Username - value", "Username: value", "Username — value")
+    username_match = re.search(
+        r'Username\s*[-–—：:]\s*(.+?)(?:\n|$)',
+        original_text,
+        re.IGNORECASE,
+    )
+    if not username_match:
+        # No Username field in the quoted message — silently ignore
+        return
+
+    username_value = username_match.group(1).strip()
+    if not username_value or username_value in ('-', '–', '—'):
+        return
+
+    # Build sender mention (@username preferred, full name as fallback)
+    sender = msg.from_user
+    if sender:
+        sender_mention = f"@{sender.username}" if sender.username else (sender.full_name or "User")
+    else:
+        sender_mention = "User"
+
+    await _reply_custom(
+        msg,
+        context.application.bot_data,
+        "daqiang_reply",
+        username_value=username_value,
+        sender_mention=sender_mention,
+    )
+
+
 async def total_plus_command(update: Update, context: CallbackContext) -> None:
     current_chat = update.effective_chat.id
     chat_entries = {uid: cnt for (cid, uid), cnt in plus_counters.items() if cid == current_chat}
@@ -3007,6 +3058,7 @@ def main():
 
     application.add_handler(MessageHandler(filters.REPLY & filters.Regex(r'^\+$'), handle_plus_reply))
     application.add_handler(MessageHandler(filters.REPLY & filters.Regex(r'^\-$'), handle_minus_reply))
+    application.add_handler(MessageHandler(filters.REPLY & filters.Regex(r'^(打枪|သာချန်း)$'), handle_daqiang_reply))
 
     application.add_handler(MessageHandler(
         (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_deposit_report
