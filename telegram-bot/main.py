@@ -88,6 +88,8 @@ CUSTOM_MSG_LABELS = {
     "total_plus_grand": "🔢 Counter total line  ({grand_total} animated)",
     # 打枪 / သာချန်း reply
     "daqiang_reply":    "🎯 打枪/သာချန်း reply ({username_value} နှင့် {sender_mention} သုံးနိုင်)",
+    # Green alert
+    "green_alert":      "🟢 Green alert ({count} သုံးနိုင်)",
 }
 
 DEFAULT_MSGS: dict = {
@@ -131,6 +133,8 @@ DEFAULT_MSGS: dict = {
     "total_plus_grand":  "Total = {grand_total}",
     # 打枪 / သာချန်း reply
     "daqiang_reply":     "{username_value}\n\n{sender_mention} ဒီ client ကို သင့်ဘက်မှာ မှတ်သားထားဖို့ မမေ့ပါနဲ့",
+    # Green alert
+    "green_alert":       "ဒီနေ့ Green ပေးပို့သည်မှာ {count} ယောက် ရှိပါပြီ။\n\nTarget ပြည့်ချင်ရင် လူကောင်းရှာဖို့ အကြံပြုပါသည်။",
 }
 
 
@@ -679,6 +683,10 @@ PLUS_DATA_FILE = os.path.join(os.path.dirname(__file__), 'plus_data.json')
 plus_counters: dict = {}
 plus_names: dict = {}
 plus_counted_msgs: dict = {}
+
+# Green alert daily counter — (chat_id, date_key) -> count  (in-memory only, resets each day)
+GREEN_ALERT_THRESHOLD = 5   # start alerting from the (THRESHOLD+1)-th submission
+green_counters: dict = {}
 
 
 def _plus_key_to_str(key: tuple) -> str:
@@ -2607,6 +2615,40 @@ async def handle_daqiang_reply(update: Update, context: CallbackContext) -> None
     )
 
 
+async def handle_green_report(update: Update, context: CallbackContext) -> None:
+    """Count messages containing 'Green'/'green' per chat per day and alert after threshold.
+
+    - Counts in-memory only (resets when bot restarts or next day).
+    - Starts alerting from the (GREEN_ALERT_THRESHOLD+1)-th submission onward.
+    - Custom message stored in MongoDB via /setmsg → 'green_alert'.
+    - Placeholder: {count} = today's running total for this chat.
+    """
+    msg = update.message
+    if not msg or not msg.chat:
+        return
+    # Group/supergroup only
+    if msg.chat.type not in ('group', 'supergroup'):
+        return
+
+    text = (msg.text or msg.caption or '').strip()
+    if not re.search(r'(?i)\bgreen\b', text):
+        return
+
+    chat_id = str(msg.chat.id)
+    today_key = get_data_key()
+    key = (chat_id, today_key)
+    green_counters[key] = green_counters.get(key, 0) + 1
+    count = green_counters[key]
+
+    if count > GREEN_ALERT_THRESHOLD:
+        await _reply_custom(
+            msg,
+            context.application.bot_data,
+            "green_alert",
+            count=count,
+        )
+
+
 async def total_plus_command(update: Update, context: CallbackContext) -> None:
     current_chat = update.effective_chat.id
     chat_entries = {uid: cnt for (cid, uid), cnt in plus_counters.items() if cid == current_chat}
@@ -3058,6 +3100,12 @@ def main():
     application.add_handler(MessageHandler(filters.REPLY & filters.Regex(r'^\+$'), handle_plus_reply))
     application.add_handler(MessageHandler(filters.REPLY & filters.Regex(r'^\-$'), handle_minus_reply))
     application.add_handler(MessageHandler(filters.REPLY & filters.Regex(r'^(打枪|သာချန်း)$'), handle_daqiang_reply))
+
+    # Green alert — fires independently in group=3 so deposit/whatsapp handlers are unaffected
+    application.add_handler(MessageHandler(
+        (filters.TEXT | filters.CAPTION) & ~filters.COMMAND & filters.ChatType.GROUPS,
+        handle_green_report,
+    ), group=3)
 
     application.add_handler(MessageHandler(
         (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_deposit_report
