@@ -2616,20 +2616,21 @@ async def handle_daqiang_reply(update: Update, context: CallbackContext) -> None
 
 
 def _is_green_data_submission(text: str) -> bool:
-    """Return True only when 'text' looks like a member data submission containing Green.
+    """Return True only when 'text' looks like a member data submission containing Green or Scam.
 
     Rules (all must pass):
-      1. Contains the word 'green' (case-insensitive, standalone or as prefix like 'Green account').
+      1. Contains 'green' OR 'scam' anywhere in the text (case-insensitive).
+         Matches any variation: "Green account", "green level 2", "3 scam",
+         "scam task3", "GREEN", "SCAM", etc.
       2. Contains at least one numeric sequence of 8 or more consecutive digits
-         — this is the phone number or account ID that every submission has, and that
-         casual conversation about the color green almost never contains.
+         — every real submission has a phone number or account ID; casual chat
+         mentioning green/scam almost never does.
 
-    This prevents ordinary chat messages such as
-        "the green light is on"  or  "Green ရောင် ကောင်းသည်"
-    from triggering the counter while still catching every format shown in production
-    (text-only, photo+caption, single-line, multi-line, any language mix).
+    This prevents ordinary conversation such as
+        "green light ကောင်းသည်"  or  "scam လောင်းတယ်"
+    from triggering the counter.
     """
-    if not re.search(r'green', text, re.IGNORECASE):
+    if not re.search(r'green|scam', text, re.IGNORECASE):
         return False
     # At least one run of 8+ digits anywhere in the message
     if not re.search(r'\d{8,}', text):
