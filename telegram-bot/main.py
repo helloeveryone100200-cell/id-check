@@ -685,7 +685,7 @@ plus_names: dict = {}
 plus_counted_msgs: dict = {}
 
 # Green alert daily counter — (chat_id, date_key) -> count  (in-memory only, resets each day)
-GREEN_ALERT_THRESHOLD = 5   # start alerting from the (THRESHOLD+1)-th submission
+GREEN_ALERT_THRESHOLD = 10  # start alerting from the (THRESHOLD+1)-th submission
 green_counters: dict = {}
 
 
@@ -2615,11 +2615,35 @@ async def handle_daqiang_reply(update: Update, context: CallbackContext) -> None
     )
 
 
-async def handle_green_report(update: Update, context: CallbackContext) -> None:
-    """Count messages containing 'Green'/'green' per chat per day and alert after threshold.
+def _is_green_data_submission(text: str) -> bool:
+    """Return True only when 'text' looks like a member data submission containing Green.
 
-    - Counts in-memory only (resets when bot restarts or next day).
-    - Starts alerting from the (GREEN_ALERT_THRESHOLD+1)-th submission onward.
+    Rules (all must pass):
+      1. Contains the word 'green' (case-insensitive, standalone or as prefix like 'Green account').
+      2. Contains at least one numeric sequence of 8 or more consecutive digits
+         — this is the phone number or account ID that every submission has, and that
+         casual conversation about the color green almost never contains.
+
+    This prevents ordinary chat messages such as
+        "the green light is on"  or  "Green ရောင် ကောင်းသည်"
+    from triggering the counter while still catching every format shown in production
+    (text-only, photo+caption, single-line, multi-line, any language mix).
+    """
+    if not re.search(r'green', text, re.IGNORECASE):
+        return False
+    # At least one run of 8+ digits anywhere in the message
+    if not re.search(r'\d{8,}', text):
+        return False
+    return True
+
+
+async def handle_green_report(update: Update, context: CallbackContext) -> None:
+    """Count data-submission messages containing 'Green' per chat per day and alert after threshold.
+
+    - Works with text-only messages AND photo/media with caption.
+    - Only fires for data submissions (must contain 8+ digit number alongside 'green').
+    - Counts in-memory only (resets on bot restart or the next calendar day).
+    - Starts alerting from (GREEN_ALERT_THRESHOLD + 1)-th submission onward.
     - Custom message stored in MongoDB via /setmsg → 'green_alert'.
     - Placeholder: {count} = today's running total for this chat.
     """
@@ -2630,8 +2654,12 @@ async def handle_green_report(update: Update, context: CallbackContext) -> None:
     if msg.chat.type not in ('group', 'supergroup'):
         return
 
+    # Accept text messages and any media with a caption (photo, document, etc.)
     text = (msg.text or msg.caption or '').strip()
-    if not re.search(r'(?i)\bgreen\b', text):
+    if not text:
+        return
+
+    if not _is_green_data_submission(text):
         return
 
     chat_id = str(msg.chat.id)
