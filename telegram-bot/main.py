@@ -2670,11 +2670,11 @@ async def handle_green_report(update: Update, context: CallbackContext) -> None:
     count = green_counters[key]
 
     if count > GREEN_ALERT_THRESHOLD:
-        await _reply_custom(
+        await _reply_custom_animated(
             msg,
             context.application.bot_data,
             "green_alert",
-            count=count,
+            animated_counts={"count": count},
         )
 
 
