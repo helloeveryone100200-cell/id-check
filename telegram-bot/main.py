@@ -1291,30 +1291,67 @@ async def clear_data(update: Update, context: CallbackContext) -> None:
         and chat_id in context.application.bot_data['group_data']
         and today_key in context.application.bot_data['group_data'][chat_id]
     )
-    if mg_entries or pickle_has:
-        # Delete from MongoDB
-        mg_delete_group_data(chat_id, today_key)
-        # Delete from pickle
-        if pickle_has:
-            del context.application.bot_data['group_data'][chat_id][today_key]
-            if context.application.persistence:
-                await context.application.persistence.flush()
-
-        for k in [k for k in plus_counters if k[0] == int(chat_id)]:
-            del plus_counters[k]
-        for k in [k for k in plus_counted_msgs if k[0] == int(chat_id)]:
-            del plus_counted_msgs[k]
-        save_plus_data()
-
-        for k in [k for k in data_msg_map if k[0] == int(chat_id)]:
-            del data_msg_map[k]
-        save_data_msg_map()
-
-        await _reply_custom(update.message, context.application.bot_data,
-                            "cleardata_ok", today=today_key)
-    else:
+    if not (mg_entries or pickle_has):
         await _reply_custom(update.message, context.application.bot_data,
                             "cleardata_empty", today=today_key)
+        return
+
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "✅ Confirm",
+            callback_data="cleardata_confirm",
+            style="success",
+        ),
+        InlineKeyboardButton(
+            "❌ Cancel",
+            callback_data="cleardata_cancel",
+            style="danger",
+        ),
+    ]])
+    await update.message.reply_text(
+        f"⚠️ <b>ယနေ့ ({today_key}) data နှင့် Plus counter ကို ရှင်းလင်းမည်။</b>\n\n"
+        "ဆက်လုပ်မည်လား?",
+        parse_mode='HTML',
+        reply_markup=keyboard,
+    )
+
+
+async def cleardata_callback(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "cleardata_cancel":
+        await query.edit_message_text("❌ Clear data လုပ်ဆောင်ချက်ကို cancel လုပ်လိုက်ပါပြီ။")
+        return
+
+    if query.data != "cleardata_confirm" or not query.message:
+        return
+
+    chat_id = str(query.message.chat_id)
+    today_key = get_data_key()
+
+    # Delete only after the user explicitly confirms.
+    mg_delete_group_data(chat_id, today_key)
+    group_data = context.application.bot_data.get('group_data', {})
+    if chat_id in group_data and today_key in group_data[chat_id]:
+        del group_data[chat_id][today_key]
+        if context.application.persistence:
+            await context.application.persistence.flush()
+
+    chat_id_int = int(chat_id)
+    for k in [k for k in plus_counters if k[0] == chat_id_int]:
+        del plus_counters[k]
+    for k in [k for k in plus_counted_msgs if k[0] == chat_id_int]:
+        del plus_counted_msgs[k]
+    save_plus_data()
+
+    for k in [k for k in data_msg_map if k[0] == chat_id_int]:
+        del data_msg_map[k]
+    save_data_msg_map()
+
+    await query.edit_message_text(
+        get_msg(context.application.bot_data, "cleardata_ok", today=today_key)
+    )
 
 
 async def admin_clearall_command(update: Update, context: CallbackContext) -> None:
@@ -1343,8 +1380,16 @@ async def admin_clearall_command(update: Update, context: CallbackContext) -> No
         return
 
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ အတည်ပြုရှင်းလင်းမည်", callback_data="adminall_clear_confirm"),
-        InlineKeyboardButton("❌ မလုပ်တော့ပါ", callback_data="adminall_cancel"),
+        InlineKeyboardButton(
+            "✅ Confirm",
+            callback_data="adminall_clear_confirm",
+            style="success",
+        ),
+        InlineKeyboardButton(
+            "❌ Cancel",
+            callback_data="adminall_cancel",
+            style="danger",
+        ),
     ]])
     await update.message.reply_text(
         f"⚠️ <b>Group အားလုံး ရှင်းလင်းမည်</b>\n\n"
@@ -1368,8 +1413,16 @@ async def admin_resetplusall_command(update: Update, context: CallbackContext) -
 
     chat_count = len(set(k[0] for k in plus_counters))
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ အတည်ပြု Reset မည်", callback_data="adminall_resetplus_confirm"),
-        InlineKeyboardButton("❌ မလုပ်တော့ပါ", callback_data="adminall_cancel"),
+        InlineKeyboardButton(
+            "✅ Confirm",
+            callback_data="adminall_resetplus_confirm",
+            style="success",
+        ),
+        InlineKeyboardButton(
+            "❌ Cancel",
+            callback_data="adminall_cancel",
+            style="danger",
+        ),
     ]])
     await update.message.reply_text(
         f"⚠️ <b>Group အားလုံး Plus Counter Reset မည်</b>\n\nGroup <b>{chat_count}</b> ခု ကို reset မည်။\nဆက်လုပ်မည်လား?",
@@ -2706,14 +2759,59 @@ async def reset_plus_command(update: Update, context: CallbackContext) -> None:
         await _reply_custom(update.message, context.application.bot_data, "reset_plus_empty")
         return
 
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            "✅ Confirm",
+            callback_data="resetplus_confirm",
+            style="success",
+        ),
+        InlineKeyboardButton(
+            "❌ Cancel",
+            callback_data="resetplus_cancel",
+            style="danger",
+        ),
+    ]])
+    await update.message.reply_text(
+        f"⚠️ ဤ chat ၏ Plus counter ({len(keys_to_del)} ဦး) ကို reset လုပ်မည်။\n\n"
+        "ဆက်လုပ်မည်လား?",
+        reply_markup=keyboard,
+    )
+
+
+async def resetplus_callback(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "resetplus_cancel":
+        await query.edit_message_text("❌ Plus counter reset လုပ်ဆောင်ချက်ကို cancel လုပ်လိုက်ပါပြီ။")
+        return
+
+    if query.data != "resetplus_confirm" or not query.message:
+        return
+
+    current_chat = query.message.chat_id
+    keys_to_del = [k for k in plus_counters if k[0] == current_chat]
+
+    # The counter may have changed while the confirmation was open.
+    if not keys_to_del:
+        await query.edit_message_text(
+            get_msg(context.application.bot_data, "reset_plus_empty")
+        )
+        return
+
     for k in keys_to_del:
         del plus_counters[k]
     for k in [k for k in plus_counted_msgs if k[0] == current_chat]:
         del plus_counted_msgs[k]
     save_plus_data()
 
-    await _reply_custom(update.message, context.application.bot_data,
-                        "reset_plus_ok", count=len(keys_to_del))
+    await query.edit_message_text(
+        get_msg(
+            context.application.bot_data,
+            "reset_plus_ok",
+            count=len(keys_to_del),
+        )
+    )
 
 
 # ============================================================
@@ -3013,6 +3111,7 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("showdata", show_data))
     application.add_handler(CommandHandler("cleardata", clear_data))
+    application.add_handler(CallbackQueryHandler(cleardata_callback, pattern=r'^cleardata_(confirm|cancel)$'))
     application.add_handler(CommandHandler("form", report_form_command))
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("listusers", list_users))
@@ -3032,6 +3131,7 @@ def main():
     application.add_handler(CommandHandler("whatsapp_total", whatsapp_total_command))
     application.add_handler(CommandHandler("total_plus", total_plus_command))
     application.add_handler(CommandHandler("reset_plus", reset_plus_command))
+    application.add_handler(CallbackQueryHandler(resetplus_callback, pattern=r'^resetplus_(confirm|cancel)$'))
 
     application.add_handler(CallbackQueryHandler(clear_group_data_callback, pattern=r'^admin_clear_-?\d+$'))
     application.add_handler(CallbackQueryHandler(cancel_group_action, pattern='^admin_cancel$'))
