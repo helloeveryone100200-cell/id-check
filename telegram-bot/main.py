@@ -151,6 +151,23 @@ def _get_custom_msgs(bot_data: dict) -> dict:
     return bot_data.setdefault("custom_msgs", {})
 
 
+def _get_first_custom_emoji_id(bot_data: dict, key: str) -> str | None:
+    """Return the first stored custom emoji ID for a configurable message."""
+    stored = _get_custom_msgs(bot_data).get(key, {})
+    for entity in sorted(
+        stored.get("entities") or [],
+        key=lambda item: item.get("offset", 0),
+    ):
+        if entity.get("type") != "custom_emoji":
+            continue
+        custom_emoji_id = (
+            entity.get("custom_emoji_id") or entity.get("customEmojiId")
+        )
+        if custom_emoji_id:
+            return str(custom_emoji_id)
+    return None
+
+
 def get_msg(bot_data: dict, key: str, **fmt) -> str:
     """Return owner-customised message, falling back to DEFAULT_MSGS."""
     stored = _get_custom_msgs(bot_data).get(key, {})
@@ -247,10 +264,23 @@ async def setmsg_start(update: Update, context: CallbackContext) -> int:
         await update.message.reply_text("❌ Bot PM ထဲတွင်သာ အသုံးပြုနိုင်သည်။")
         return ConversationHandler.END
 
-    keyboard = [
-        [InlineKeyboardButton(label, callback_data=f"setmsg_{key}")]
-        for key, label in CUSTOM_MSG_LABELS.items()
-    ]
+    keyboard = []
+    for key, label in CUSTOM_MSG_LABELS.items():
+        custom_emoji_id = _get_first_custom_emoji_id(
+            context.application.bot_data, key
+        )
+        button_label = label
+        button_kwargs = {"callback_data": f"setmsg_{key}"}
+
+        # Telegram renders custom emoji in buttons through the dedicated
+        # icon field, not through MessageEntity metadata in button text.
+        # Keep the old checkmark label when no custom emoji is configured.
+        if custom_emoji_id:
+            button_kwargs["icon_custom_emoji_id"] = custom_emoji_id
+            if button_label.startswith("✅ "):
+                button_label = button_label[2:]
+
+        keyboard.append([InlineKeyboardButton(button_label, **button_kwargs)])
     keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="setmsg_cancel")])
     await update.message.reply_text(
         "✏️ ပြောင်းလဲလိုသော message ကို ရွေးပါ:",
