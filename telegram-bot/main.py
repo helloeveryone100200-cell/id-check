@@ -205,6 +205,37 @@ async def _reply_custom(message, bot_data: dict, key: str,
         await message.reply_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
 
 
+async def _edit_custom(query, bot_data: dict, key: str,
+                       reply_markup=None, parse_mode=None, **fmt):
+    """Edit a callback message while preserving custom emoji entities.
+
+    This is the edit-message counterpart to _reply_custom. In particular,
+    /setmsg stores animated emoji as Telegram MessageEntity metadata; using
+    get_msg() alone would keep only the visible text and strip those entities.
+    """
+    stored = _get_custom_msgs(bot_data).get(key, {})
+    raw_text = stored.get("text") or DEFAULT_MSGS.get(key, "")
+    raw_entities = stored.get("entities")
+
+    text, adj_entities_raw = _apply_fmt_and_adjust_entities(
+        raw_text, raw_entities, **fmt
+    )
+    entities = _build_entities(adj_entities_raw) if adj_entities_raw else None
+
+    if entities:
+        await query.edit_message_text(
+            text,
+            entities=entities,
+            reply_markup=reply_markup,
+        )
+    else:
+        await query.edit_message_text(
+            text,
+            parse_mode=parse_mode,
+            reply_markup=reply_markup,
+        )
+
+
 # ─── /setmsg conversation handlers ───────────────────────────────────────────
 
 async def setmsg_start(update: Update, context: CallbackContext) -> int:
@@ -1349,8 +1380,11 @@ async def cleardata_callback(update: Update, context: CallbackContext) -> None:
         del data_msg_map[k]
     save_data_msg_map()
 
-    await query.edit_message_text(
-        get_msg(context.application.bot_data, "cleardata_ok", today=today_key)
+    await _edit_custom(
+        query,
+        context.application.bot_data,
+        "cleardata_ok",
+        today=today_key,
     )
 
 
@@ -2805,12 +2839,11 @@ async def resetplus_callback(update: Update, context: CallbackContext) -> None:
         del plus_counted_msgs[k]
     save_plus_data()
 
-    await query.edit_message_text(
-        get_msg(
-            context.application.bot_data,
-            "reset_plus_ok",
-            count=len(keys_to_del),
-        )
+    await _edit_custom(
+        query,
+        context.application.bot_data,
+        "reset_plus_ok",
+        count=len(keys_to_del),
     )
 
 
