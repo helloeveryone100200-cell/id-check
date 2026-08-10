@@ -56,6 +56,7 @@ BOT_SETTINGS_PHOTO    = 42
 
 SETMSG_SELECT = 60
 SETMSG_AWAIT  = 61
+STARTBTN_AWAIT = 70
 
 
 # ============================================================
@@ -166,6 +167,63 @@ def _get_first_custom_emoji_id(bot_data: dict, key: str) -> str | None:
         if custom_emoji_id:
             return str(custom_emoji_id)
     return None
+
+
+def _first_custom_emoji_entity(entities_raw):
+    """Return the first custom-emoji entity from a Telegram entity list."""
+    for entity in sorted(
+        entities_raw or [],
+        key=lambda item: item.get("offset", 0),
+    ):
+        if entity.get("type") != "custom_emoji":
+            continue
+        custom_emoji_id = (
+            entity.get("custom_emoji_id") or entity.get("customEmojiId")
+        )
+        if custom_emoji_id:
+            return entity, str(custom_emoji_id)
+    return None, None
+
+
+def _remove_entity_from_text(text: str, entity: dict) -> str:
+    """Remove one Telegram UTF-16-offset entity from text."""
+    offset = int(entity.get("offset", 0))
+    length = int(entity.get("length", 0))
+    if length <= 0:
+        return text
+
+    encoded = text.encode("utf-16-le")
+    start = offset * 2
+    end = start + length * 2
+    try:
+        return (encoded[:start] + encoded[end:]).decode("utf-16-le")
+    except (UnicodeDecodeError, ValueError):
+        return text
+
+
+def _shift_entities_left(entities_raw, utf16_units: int):
+    """Shift Telegram entity offsets after removing a leading text prefix."""
+    if not entities_raw or not utf16_units:
+        return entities_raw
+    shifted = []
+    for entity in entities_raw:
+        item = dict(entity)
+        item["offset"] = max(0, int(item.get("offset", 0)) - utf16_units)
+        shifted.append(item)
+    return shifted
+
+
+def _start_button_markup(button: dict) -> InlineKeyboardButton:
+    """Build a start-menu URL button, including its optional custom icon."""
+    custom_emoji_id = (
+        button.get("icon_custom_emoji_id")
+        or button.get("custom_emoji_id")
+        or button.get("customEmojiId")
+    )
+    kwargs = {"url": button["url"]}
+    if custom_emoji_id:
+        kwargs["icon_custom_emoji_id"] = str(custom_emoji_id)
+    return InlineKeyboardButton(button["text"], **kwargs)
 
 
 def get_msg(bot_data: dict, key: str, **fmt) -> str:
@@ -1200,7 +1258,7 @@ async def main_menu_command(update: Update, context: CallbackContext) -> None:
         [InlineKeyboardButton("➕ Add me to your chat!", url=f"https://t.me/{bot_username}?startgroup=true")],
     ]
     for btn in context.application.bot_data['start_buttons']:
-        inline_rows.append([InlineKeyboardButton(btn['text'], url=btn['url'])])
+        inline_rows.append([_start_button_markup(btn)])
 
     inline_kb = InlineKeyboardMarkup(inline_rows)
     await _reply_custom(
@@ -1220,46 +1278,119 @@ async def remove_menu(update: Update, context: CallbackContext) -> None:
 # START BUTTON MANAGEMENT  (Admin only)
 # ============================================================
 
-async def addbutton_command(update: Update, context: CallbackContext) -> None:
-    """Admin: /addbutton <text> | <url>"""
-    if update.effective_user.id not in ADMIN_IDS:
-        return
-    if update.effective_chat.type != 'private':
-        await update.message.reply_text("❌ Bot PM ထဲတွင်သာ အသုံးပြုနိုင်သည်။")
-        return
-
-    raw = ' '.join(context.args).strip() if context.args else ''
+async def _save_start_button(update: Update, context: CallbackContext,
+                             raw: str, entities_raw=None) -> bool:
+    """Validate and persist one start button from text plus URL."""
     if '|' not in raw:
         await update.message.reply_text(
-            "📌 <b>Usage:</b> /addbutton &lt;text&gt; | &lt;url&gt;\n\n"
-            "Example:\n<code>/addbutton 🎮 Game Bot | https://t.me/gamebot</code>",
+            "📌 <b>Format:</b> animated emoji + button name | URL\n\n"
+            "ဥပမာ — animated emoji ကို အရင်ထည့်ပြီး:\n"
+            "<code>🎮 Game Bot | https://t.me/gamebot</code>\n\n"
+            "Premium animated emoji ထည့်ထားရင် ၎င်း၏ Telegram custom_emoji_id "
+            "ကို button icon အဖြစ် သုံးပါမယ်။",
             parse_mode='HTML'
         )
-        return
+        return False
 
     parts = raw.split('|', 1)
     text = parts[0].strip()
-    url  = parts[1].strip()
+    url = parts[1].strip()
 
     if not text or not url:
         await update.message.reply_text("❌ Text နှင့် URL နှစ်ခုလုံး ထည့်ပေးပါ။")
-        return
+        return False
     if not (url.startswith('http://') or url.startswith('https://')):
         await update.message.reply_text("❌ URL သည် http:// သို့မဟုတ် https:// ဖြင့် စရမည်။")
-        return
+        return False
+
+    entity, custom_emoji_id = _first_custom_emoji_entity(entities_raw)
+    if entity and custom_emoji_id:
+        # The dedicated icon field renders the emoji before the label.
+        # Remove its source glyph so the button does not show it twice.
+        prefix = parts[0]
+        prefix_start = raw.find(prefix)
+        if prefix_start >= 0:
+            entity_in_prefix = dict(entity)
+            entity_in_prefix["offset"] = max(
+                0,
+                int(entity.get("offset", 0)) -
+                _utf16_len(raw[:prefix_start]),
+            )
+            cleaned_prefix = _remove_entity_from_text(prefix, entity_in_prefix)
+            text = cleaned_prefix.strip()
 
     buttons = context.application.bot_data.setdefault('start_buttons', [])
-    buttons.append({"text": text, "url": url})
+    button = {"text": text, "url": url}
+    if custom_emoji_id:
+        button["icon_custom_emoji_id"] = custom_emoji_id
+    buttons.append(button)
     if context.application.persistence:
         await context.application.persistence.flush()
     save_bot_config_to_mongo(context.application.bot_data)
 
+    icon_note = " ✨ Custom emoji icon သိမ်းဆည်းပြီး" if custom_emoji_id else ""
     await update.message.reply_text(
-        f"✅ Button ထည့်ပြီးပါပြီ!\n\n"
+        f"✅ Button ထည့်ပြီးပါပြီ!{icon_note}\n\n"
         f"🔘 <b>{text}</b>\n🔗 {url}\n\n"
         f"စုစုပေါင်း buttons: {len(buttons)} ခု",
         parse_mode='HTML'
     )
+    return True
+
+
+async def addbutton_command(update: Update, context: CallbackContext) -> int:
+    """Admin: /addbutton, then send `text | url` with optional custom emoji."""
+    if update.effective_user.id not in ADMIN_IDS:
+        return ConversationHandler.END
+    if update.effective_chat.type != 'private':
+        await update.message.reply_text("❌ Bot PM ထဲတွင်သာ အသုံးပြုနိုင်သည်။")
+        return ConversationHandler.END
+
+    if not context.args:
+        await update.message.reply_text(
+            "🔘 <b>Start button အသစ်ထည့်ရန်</b>\n\n"
+            "နောက် message တစ်ခုမှာ button text နှင့် URL ကို ပို့ပါ:\n"
+            "<code>animated emoji Game Bot | https://t.me/gamebot</code>\n\n"
+            "Premium animated emoji ကို အစမှာ ထည့်ပါက Telegram custom_emoji_id "
+            "ကို button icon အဖြစ် သိမ်းပါမယ်။\n"
+            "<i>/cancel — ဖျက်သိမ်း</i>",
+            parse_mode='HTML'
+        )
+        return STARTBTN_AWAIT
+
+    raw = update.message.text or ""
+    command_match = re.match(r"^/\S+", raw)
+    content = raw[command_match.end():] if command_match else raw
+    entities_raw = None
+    if update.message.entities:
+        entities_raw = [entity.to_dict() for entity in update.message.entities]
+        if command_match:
+            entities_raw = _shift_entities_left(
+                entities_raw,
+                _utf16_len(raw[:command_match.end()]),
+            )
+    await _save_start_button(update, context, content, entities_raw)
+    return ConversationHandler.END
+
+
+async def addbutton_receive(update: Update, context: CallbackContext) -> int:
+    """Receive button text/URL and preserve its custom emoji entity."""
+    if update.effective_user.id not in ADMIN_IDS:
+        return ConversationHandler.END
+    if update.effective_chat.type != 'private':
+        await update.message.reply_text("❌ Bot PM ထဲတွင်သာ အသုံးပြုနိုင်သည်။")
+        return ConversationHandler.END
+
+    text = update.message.text or ""
+    if text.strip() in ("/cancel", "cancel"):
+        await update.message.reply_text("❌ Button ထည့်ခြင်းကို ဖျက်သိမ်းလိုက်ပါသည်။")
+        return ConversationHandler.END
+
+    entities_raw = None
+    if update.message.entities:
+        entities_raw = [entity.to_dict() for entity in update.message.entities]
+    await _save_start_button(update, context, text, entities_raw)
+    return ConversationHandler.END
 
 
 async def removebutton_command(update: Update, context: CallbackContext) -> None:
@@ -1277,7 +1408,16 @@ async def removebutton_command(update: Update, context: CallbackContext) -> None
 
     keyboard = []
     for i, btn in enumerate(buttons):
-        keyboard.append([InlineKeyboardButton(f"🗑 {btn['text']}", callback_data=f"rmbtn_{i}")])
+        button_label = f"🗑 {btn['text']}"
+        custom_emoji_id = (
+            btn.get("icon_custom_emoji_id")
+            or btn.get("custom_emoji_id")
+            or btn.get("customEmojiId")
+        )
+        button_kwargs = {"callback_data": f"rmbtn_{i}"}
+        if custom_emoji_id:
+            button_kwargs["icon_custom_emoji_id"] = str(custom_emoji_id)
+        keyboard.append([InlineKeyboardButton(button_label, **button_kwargs)])
     keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="rmbtn_cancel")])
 
     await update.message.reply_text(
@@ -3184,7 +3324,21 @@ def main():
     application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CommandHandler("clearall", admin_clearall_command))
     application.add_handler(CommandHandler("resetplusall", admin_resetplusall_command))
-    application.add_handler(CommandHandler("addbutton", addbutton_command))
+    addbutton_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("addbutton", addbutton_command,
+                           filters=filters.ChatType.PRIVATE),
+        ],
+        states={
+            STARTBTN_AWAIT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND,
+                               addbutton_receive),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", addbutton_receive)],
+        allow_reentry=True,
+    )
+    application.add_handler(addbutton_handler)
     application.add_handler(CommandHandler("removebutton", removebutton_command))
     application.add_handler(CommandHandler("listbuttons", listbuttons_command))
     application.add_handler(CallbackQueryHandler(removebutton_callback, pattern=r'^rmbtn_'))
