@@ -223,6 +223,11 @@ def _start_button_markup(button: dict) -> InlineKeyboardButton:
     kwargs = {"url": button["url"]}
     if custom_emoji_id:
         kwargs["icon_custom_emoji_id"] = str(custom_emoji_id)
+    # Telegram supports coloured inline button styles. Existing buttons
+    # default to success so buttons created before this change are styled too.
+    button_style = button.get("style") or "success"
+    if button_style in {"primary", "success"}:
+        kwargs["style"] = button_style
     return InlineKeyboardButton(button["text"], **kwargs)
 
 
@@ -1255,7 +1260,7 @@ async def main_menu_command(update: Update, context: CallbackContext) -> None:
         save_bot_config_to_mongo(context.application.bot_data)
 
     inline_rows = [
-        [InlineKeyboardButton("➕ Add me to your chat!", url=f"https://t.me/{bot_username}?startgroup=true")],
+        [InlineKeyboardButton("➕ Add me to your chat!", url=f"https://t.me/{bot_username}?startgroup=true", style="primary")],
     ]
     for btn in context.application.bot_data['start_buttons']:
         inline_rows.append([_start_button_markup(btn)])
@@ -1320,7 +1325,7 @@ async def _save_start_button(update: Update, context: CallbackContext,
             text = cleaned_prefix.strip()
 
     buttons = context.application.bot_data.setdefault('start_buttons', [])
-    button = {"text": text, "url": url}
+    button = {"text": text, "url": url, "style": "success"}
     if custom_emoji_id:
         button["icon_custom_emoji_id"] = custom_emoji_id
     buttons.append(button)
