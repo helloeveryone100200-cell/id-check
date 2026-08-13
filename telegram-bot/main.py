@@ -1228,6 +1228,14 @@ async def help_command(update: Update, context: CallbackContext) -> None:
     await _reply_custom(update.message, context.application.bot_data, "help")
 
 
+def _update_message(update: Update):
+    """Return the message for either a command or an inline-button update."""
+    return update.message or (
+        update.callback_query.message
+        if update.callback_query else None
+    )
+
+
 async def report_form_command(update: Update, context: CallbackContext) -> None:
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
     intro = get_msg(context.application.bot_data, "form")
@@ -1237,14 +1245,29 @@ async def report_form_command(update: Update, context: CallbackContext) -> None:
 async def main_menu_command(update: Update, context: CallbackContext) -> None:
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
 
-    keyboard = [
-        [KeyboardButton("/showdata"), KeyboardButton("/cleardata")],
-        [KeyboardButton("/feedback"), KeyboardButton("/form")],
-        [KeyboardButton("/total_plus"), KeyboardButton("/reset_plus")],
-        [KeyboardButton("/guide"), KeyboardButton("/hidemenu")],
+    menu_rows = [
+        [
+            InlineKeyboardButton(
+                "Showdata", callback_data="mainmenu_showdata", style="primary"
+            ),
+            InlineKeyboardButton(
+                "Total Plus", callback_data="mainmenu_total_plus", style="primary"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "Clear Data", callback_data="mainmenu_cleardata", style="primary"
+            ),
+            InlineKeyboardButton(
+                "Reset Plus", callback_data="mainmenu_reset_plus", style="primary"
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "Hide Menu", callback_data="mainmenu_hidemenu", style="danger"
+            ),
+        ],
     ]
-
-    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
     user_name = update.effective_user.full_name if update.effective_user else "User"
 
     bot_username = context.bot.username
@@ -1265,11 +1288,35 @@ async def main_menu_command(update: Update, context: CallbackContext) -> None:
     for btn in context.application.bot_data['start_buttons']:
         inline_rows.append([_start_button_markup(btn)])
 
+    inline_rows.extend(menu_rows)
     inline_kb = InlineKeyboardMarkup(inline_rows)
     await _reply_custom(
         update.message, context.application.bot_data, "welcome",
         reply_markup=inline_kb, name=user_name
     )
+
+
+async def main_menu_callback(update: Update, context: CallbackContext) -> None:
+    """Handle actions from the styled main-menu inline keyboard."""
+    query = update.callback_query
+    if not query or not query.message:
+        return
+    await query.answer()
+
+    handlers = {
+        "mainmenu_showdata": show_data,
+        "mainmenu_total_plus": total_plus_command,
+        "mainmenu_cleardata": clear_data,
+        "mainmenu_reset_plus": reset_plus_command,
+    }
+    if query.data == "mainmenu_hidemenu":
+        await query.edit_message_reply_markup(reply_markup=None)
+        return
+
+    handler = handlers.get(query.data)
+    if handler:
+        await handler(update, context)
+
 
 async def remove_menu(update: Update, context: CallbackContext) -> None:
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
@@ -1486,6 +1533,7 @@ async def listbuttons_command(update: Update, context: CallbackContext) -> None:
 
 
 async def clear_data(update: Update, context: CallbackContext) -> None:
+    message = _update_message(update)
     chat_id = str(update.effective_chat.id)
     today_key = get_data_key()
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
@@ -1498,7 +1546,7 @@ async def clear_data(update: Update, context: CallbackContext) -> None:
         and today_key in context.application.bot_data['group_data'][chat_id]
     )
     if not (mg_entries or pickle_has):
-        await _reply_custom(update.message, context.application.bot_data,
+        await _reply_custom(message, context.application.bot_data,
                             "cleardata_empty", today=today_key)
         return
 
@@ -1514,7 +1562,7 @@ async def clear_data(update: Update, context: CallbackContext) -> None:
             style="danger",
         ),
     ]])
-    await update.message.reply_text(
+    await message.reply_text(
         f"⚠️ <b>ယနေ့ ({today_key}) data နှင့် Plus counter ကို ရှင်းလင်းမည်။</b>\n\n"
         "ဆက်လုပ်မည်လား?",
         parse_mode='HTML',
@@ -1710,6 +1758,7 @@ async def adminall_callback(update: Update, context: CallbackContext) -> None:
 
 
 async def show_data(update: Update, context: CallbackContext) -> None:
+    message = _update_message(update)
     chat_id = str(update.effective_chat.id)
     today_key = get_data_key()
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
@@ -1720,7 +1769,7 @@ async def show_data(update: Update, context: CallbackContext) -> None:
         collected_data_list = context.application.bot_data.get('group_data', {}).get(chat_id, {}).get(today_key, [])
 
     if not collected_data_list:
-        await _reply_custom(update.message, context.application.bot_data,
+        await _reply_custom(message, context.application.bot_data,
                             "showdata_empty", today=today_key)
         return
 
@@ -1741,14 +1790,14 @@ async def show_data(update: Update, context: CallbackContext) -> None:
     response_text = "\n".join(parts_list)
 
     if len(response_text) > 4096:
-        await update.message.reply_text("Warning: Data too long. Partial display:")
-        await update.message.reply_text(response_text[:4000])
+        await message.reply_text("Warning: Data too long. Partial display:")
+        await message.reply_text(response_text[:4000])
     else:
-        await update.message.reply_text(response_text)
+        await message.reply_text(response_text)
 
     _u = update.effective_user
     _mention = f"@{_u.username}" if (_u and _u.username) else (_u.full_name if _u else "User")
-    await _reply_custom(update.message, context.application.bot_data,
+    await _reply_custom(message, context.application.bot_data,
                         "showdata_footer", parse_mode='HTML', mention=_mention)
 
 
@@ -2941,31 +2990,33 @@ async def handle_green_report(update: Update, context: CallbackContext) -> None:
 
 
 async def total_plus_command(update: Update, context: CallbackContext) -> None:
+    message = _update_message(update)
     current_chat = update.effective_chat.id
     chat_entries = {uid: cnt for (cid, uid), cnt in plus_counters.items() if cid == current_chat}
 
     if not chat_entries:
-        await _reply_custom(update.message, context.application.bot_data, "total_plus_empty")
+        await _reply_custom(message, context.application.bot_data, "total_plus_empty")
         return
 
     grand_total = sum(chat_entries.values())
     await _send_total_plus(
-        update.message, context.application.bot_data,
+        message, context.application.bot_data,
         chat_entries, grand_total, plus_names,
     )
     _u = update.effective_user
     _mention = f"@{_u.username}" if (_u and _u.username) else (_u.full_name if _u else "User")
-    await _reply_custom(update.message, context.application.bot_data,
+    await _reply_custom(message, context.application.bot_data,
                         "total_plus_footer", parse_mode='HTML', mention=_mention)
 
 
 async def reset_plus_command(update: Update, context: CallbackContext) -> None:
     """/reset_plus — ဤ chat ထဲးမှာ plus_counters ကိုသာ ရှင်လင်းသည်။"""
+    message = _update_message(update)
     current_chat = update.effective_chat.id
     keys_to_del = [k for k in plus_counters if k[0] == current_chat]
 
     if not keys_to_del:
-        await _reply_custom(update.message, context.application.bot_data, "reset_plus_empty")
+        await _reply_custom(message, context.application.bot_data, "reset_plus_empty")
         return
 
     keyboard = InlineKeyboardMarkup([[
@@ -2980,7 +3031,7 @@ async def reset_plus_command(update: Update, context: CallbackContext) -> None:
             style="danger",
         ),
     ]])
-    await update.message.reply_text(
+    await message.reply_text(
         f"⚠️ ဤ chat ၏ Plus counter ({len(keys_to_del)} ဦး) ကို reset လုပ်မည်။\n\n"
         "ဆက်လုပ်မည်လား?",
         reply_markup=keyboard,
@@ -3315,6 +3366,7 @@ def main():
 
     application.add_handler(CommandHandler("menu", main_menu_command))
     application.add_handler(CommandHandler("hidemenu", remove_menu))
+    application.add_handler(CallbackQueryHandler(main_menu_callback, pattern=r'^mainmenu_(showdata|total_plus|cleardata|reset_plus|hidemenu)$'))
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("showdata", show_data))
