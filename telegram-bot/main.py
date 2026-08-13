@@ -1245,29 +1245,14 @@ async def report_form_command(update: Update, context: CallbackContext) -> None:
 async def main_menu_command(update: Update, context: CallbackContext) -> None:
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
 
-    menu_rows = [
-        [
-            InlineKeyboardButton(
-                "Showdata", callback_data="mainmenu_showdata", style="primary"
-            ),
-            InlineKeyboardButton(
-                "Total Plus", callback_data="mainmenu_total_plus", style="primary"
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                "Clear Data", callback_data="mainmenu_cleardata", style="primary"
-            ),
-            InlineKeyboardButton(
-                "Reset Plus", callback_data="mainmenu_reset_plus", style="primary"
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                "Hide Menu", callback_data="mainmenu_hidemenu", style="danger"
-            ),
-        ],
+    keyboard = [
+        [KeyboardButton("Showdata"), KeyboardButton("Total Plus")],
+        [KeyboardButton("Clear Data"), KeyboardButton("Reset Plus")],
+        [KeyboardButton("Hide Menu")],
     ]
+    reply_markup = ReplyKeyboardMarkup(
+        keyboard, resize_keyboard=True, one_time_keyboard=False
+    )
     user_name = update.effective_user.full_name if update.effective_user else "User"
 
     bot_username = context.bot.username
@@ -1288,32 +1273,24 @@ async def main_menu_command(update: Update, context: CallbackContext) -> None:
     for btn in context.application.bot_data['start_buttons']:
         inline_rows.append([_start_button_markup(btn)])
 
-    inline_rows.extend(menu_rows)
     inline_kb = InlineKeyboardMarkup(inline_rows)
     await _reply_custom(
         update.message, context.application.bot_data, "welcome",
         reply_markup=inline_kb, name=user_name
     )
+    await update.message.reply_text("Menu", reply_markup=reply_markup)
 
 
-async def main_menu_callback(update: Update, context: CallbackContext) -> None:
-    """Handle actions from the styled main-menu inline keyboard."""
-    query = update.callback_query
-    if not query or not query.message:
-        return
-    await query.answer()
-
+async def main_menu_text_handler(update: Update, context: CallbackContext) -> None:
+    """Handle the human-readable labels sent by the reply keyboard."""
     handlers = {
-        "mainmenu_showdata": show_data,
-        "mainmenu_total_plus": total_plus_command,
-        "mainmenu_cleardata": clear_data,
-        "mainmenu_reset_plus": reset_plus_command,
+        "Showdata": show_data,
+        "Total Plus": total_plus_command,
+        "Clear Data": clear_data,
+        "Reset Plus": reset_plus_command,
+        "Hide Menu": remove_menu,
     }
-    if query.data == "mainmenu_hidemenu":
-        await query.edit_message_reply_markup(reply_markup=None)
-        return
-
-    handler = handlers.get(query.data)
+    handler = handlers.get((update.message.text or "").strip())
     if handler:
         await handler(update, context)
 
@@ -3366,7 +3343,10 @@ def main():
 
     application.add_handler(CommandHandler("menu", main_menu_command))
     application.add_handler(CommandHandler("hidemenu", remove_menu))
-    application.add_handler(CallbackQueryHandler(main_menu_callback, pattern=r'^mainmenu_(showdata|total_plus|cleardata|reset_plus|hidemenu)$'))
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r'^(Showdata|Total Plus|Clear Data|Reset Plus|Hide Menu)$'),
+        main_menu_text_handler,
+    ))
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("showdata", show_data))
