@@ -1246,9 +1246,15 @@ async def main_menu_command(update: Update, context: CallbackContext) -> None:
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
 
     keyboard = [
-        [KeyboardButton("Showdata"), KeyboardButton("Total Plus")],
-        [KeyboardButton("Clear Data"), KeyboardButton("Reset Plus")],
-        [KeyboardButton("Hide Menu")],
+        [
+            KeyboardButton("Showdata", style="primary"),
+            KeyboardButton("Total Plus", style="primary"),
+        ],
+        [
+            KeyboardButton("Clear Data", style="primary"),
+            KeyboardButton("Reset Plus", style="primary"),
+        ],
+        [KeyboardButton("Hide Menu", style="danger")],
     ]
     reply_markup = ReplyKeyboardMarkup(
         keyboard, resize_keyboard=True, one_time_keyboard=False
