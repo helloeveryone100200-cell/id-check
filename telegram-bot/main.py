@@ -1254,6 +1254,10 @@ async def main_menu_command(update: Update, context: CallbackContext) -> None:
             KeyboardButton("Clear Data", style="primary"),
             KeyboardButton("Reset Plus", style="primary"),
         ],
+        [
+            KeyboardButton("Clear All", style="success"),
+            KeyboardButton("Reset Plus All", style="success"),
+        ],
         [KeyboardButton("Hide Menu", style="danger")],
     ]
     reply_markup = ReplyKeyboardMarkup(
@@ -1294,6 +1298,8 @@ async def main_menu_text_handler(update: Update, context: CallbackContext) -> No
         "Total Plus": total_plus_command,
         "Clear Data": clear_data,
         "Reset Plus": reset_plus_command,
+        "Clear All": admin_clearall_command,
+        "Reset Plus All": admin_resetplusall_command,
         "Hide Menu": remove_menu,
     }
     handler = handlers.get((update.message.text or "").strip())
@@ -3350,7 +3356,9 @@ def main():
     application.add_handler(CommandHandler("menu", main_menu_command))
     application.add_handler(CommandHandler("hidemenu", remove_menu))
     application.add_handler(MessageHandler(
-        filters.TEXT & filters.Regex(r'^(Showdata|Total Plus|Clear Data|Reset Plus|Hide Menu)$'),
+        filters.TEXT & filters.Regex(
+            r'^(Showdata|Total Plus|Clear Data|Reset Plus|Clear All|Reset Plus All|Hide Menu)$'
+        ),
         main_menu_text_handler,
     ))
     application.add_handler(CommandHandler("start", start))
