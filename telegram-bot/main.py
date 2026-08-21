@@ -35,6 +35,7 @@ logging.basicConfig(
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
 
 TOKEN = os.getenv('BOT_TOKEN')
 
@@ -1898,6 +1899,18 @@ async def broadcast_start(update: Update, context: CallbackContext) -> int:
         await update.message.reply_text("No tracked users or groups found.")
         return ConversationHandler.END
 
+    if context.args and context.args[0].lower() == "all":
+        target_ids = sorted(set(users) | set(groups), key=str)
+        context.user_data['target_broadcast_id'] = "ALL"
+        context.user_data['target_broadcast_ids'] = target_ids
+        context.user_data['target_name'] = f"all chats ({len(target_ids)})"
+        await update.message.reply_text(
+            f"📢 <b>{len(target_ids)} ခုလုံး</b> သို့ ပေးပို့ရန် message ကို forward "
+            "သို့မဟုတ် ရိုက်ထည့်ပါ။\n(/cancel ဖြင့် ရပ်နိုင်)",
+            parse_mode='HTML'
+        )
+        return BROADCAST_AWAITING_MESSAGE
+
     keyboard = []
     for user_id in sorted(list(users)):
         try:
@@ -1967,6 +1980,7 @@ async def broadcast_confirm(update: Update, context: CallbackContext) -> int:
     await query.answer()
 
     target_id = context.user_data.pop('target_broadcast_id', None)
+    target_ids = context.user_data.pop('target_broadcast_ids', None)
     msg_id = context.user_data.pop('broadcast_msg_id', None)
     from_chat = context.user_data.pop('broadcast_from_chat', None)
     target_name = context.user_data.pop('target_name', 'Unknown')
@@ -1975,13 +1989,36 @@ async def broadcast_confirm(update: Update, context: CallbackContext) -> int:
         await query.edit_message_text("❌ အချက်အလက်မပြည့်စုံ။")
         return ConversationHandler.END
 
-    try:
-        await context.application.bot.copy_message(
-            chat_id=target_id, from_chat_id=from_chat, message_id=msg_id
+    if target_id == "ALL":
+        sent_count = 0
+        failed_count = 0
+        targets = target_ids or []
+        for chat_id in targets:
+            try:
+                await context.application.bot.copy_message(
+                    chat_id=chat_id, from_chat_id=from_chat, message_id=msg_id
+                )
+                sent_count += 1
+                # Stay below Telegram's broadcast rate limit.
+                await asyncio.sleep(0.05)
+            except Exception as e:
+                failed_count += 1
+                logger.warning("Broadcast to %s failed: %s", chat_id, e)
+
+        result = (
+            f"✅ <b>Broadcast ပြီးပါပြီ။</b>\n"
+            f"ပို့ပြီး: <b>{sent_count}</b> ခု\n"
+            f"မပို့နိုင်: <b>{failed_count}</b> ခု"
         )
-        await query.edit_message_text(f"✅ <b>{target_name}</b> ထံ ပေးပို့ပြီးပါပြီ။", parse_mode='HTML')
-    except Exception as e:
-        await query.edit_message_text(f"❌ Error: {e}")
+        await query.edit_message_text(result, parse_mode='HTML')
+    else:
+        try:
+            await context.application.bot.copy_message(
+                chat_id=target_id, from_chat_id=from_chat, message_id=msg_id
+            )
+            await query.edit_message_text(f"✅ <b>{target_name}</b> ထံ ပေးပို့ပြီးပါပြီ။", parse_mode='HTML')
+        except Exception as e:
+            await query.edit_message_text(f"❌ Error: {e}")
 
     return ConversationHandler.END
 
@@ -1992,7 +2029,10 @@ async def broadcast_cancel(update: Update, context: CallbackContext) -> int:
         await update.callback_query.edit_message_text("❌ Broadcast ဖျက်သိမ်းလိုက်ပါသည်။")
     elif update.message:
         await update.message.reply_text("❌ Broadcast cancelled.")
-    for key in ['target_broadcast_id', 'broadcast_msg_id', 'broadcast_from_chat', 'target_name']:
+    for key in [
+        'target_broadcast_id', 'target_broadcast_ids',
+        'broadcast_msg_id', 'broadcast_from_chat', 'target_name'
+    ]:
         context.user_data.pop(key, None)
     return ConversationHandler.END
 
