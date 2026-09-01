@@ -2649,9 +2649,9 @@ async def schedule_set_time(update: Update, context: CallbackContext) -> int:
 async def schedule_set_message(update: Update, context: CallbackContext) -> int:
     context.user_data['new_schedule_message'] = update.message.text
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("1️⃣ One-time", callback_data='sched_type_once')],
-        [InlineKeyboardButton("🔁 Every Day", callback_data='sched_type_daily')],
-        [InlineKeyboardButton("❌ Cancel", callback_data='sched_cancel')],
+        [InlineKeyboardButton("1️⃣ One-time", callback_data='sched_type_once', style="primary")],
+        [InlineKeyboardButton("🔁 Every Day", callback_data='sched_type_daily', style="primary")],
+        [InlineKeyboardButton("❌ Cancel", callback_data='sched_cancel', style="danger")],
     ])
     await update.message.reply_text("📌 Schedule type ရွေးပါ:", reply_markup=keyboard)
     return SCHEDULE_SELECT_TYPE
@@ -2680,9 +2680,27 @@ async def schedule_select_type(update: Update, context: CallbackContext) -> int:
             name = chat.title or f"Group {group_id}"
         except Exception:
             name = f"Group {group_id}"
-        keyboard.append([InlineKeyboardButton(f"👥 {name}", callback_data=f'sched_grp_{group_id}')])
-    keyboard.append([InlineKeyboardButton("✅ All Groups", callback_data='sched_grp_ALL')])
-    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data='sched_cancel')])
+        keyboard.append([
+            InlineKeyboardButton(
+                f"👥 {name}",
+                callback_data=f'sched_grp_{group_id}',
+                style="primary",
+            )
+        ])
+    keyboard.append([
+        InlineKeyboardButton(
+            "✅ All Groups",
+            callback_data='sched_grp_ALL',
+            style="success",
+        )
+    ])
+    keyboard.append([
+        InlineKeyboardButton(
+            "❌ Cancel",
+            callback_data='sched_cancel',
+            style="danger",
+        )
+    ])
 
     await query.edit_message_text(
         f"✅ Type: <b>{type_label}</b>\n\n👥 Group ရွေးပါ:",
