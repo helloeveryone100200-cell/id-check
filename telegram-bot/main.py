@@ -2618,6 +2618,7 @@ async def scheduled_message_job(context: CallbackContext) -> None:
 
     if sched.get('type') == 'once':
         schedules.pop(sched_id, None)
+        delete_schedule_from_mongo(sched_id)
         if context.application.persistence:
             await context.application.persistence.flush()
 
@@ -2743,6 +2744,10 @@ async def schedule_select_group(update: Update, context: CallbackContext) -> int
         'hour': hour, 'minute': minute, 'message': message_text,
         'group_ids': selected_groups, 'type': sched_type,
     }
+    save_schedule_to_mongo(
+        sched_id,
+        context.application.bot_data['schedules'][sched_id],
+    )
 
     tz = get_yangon_tz()
     if sched_type == 'once':
@@ -2812,12 +2817,98 @@ async def removeschedule_command(update: Update, context: CallbackContext) -> No
     if sched_id not in schedules:
         await update.message.reply_text(f"❌ Schedule <code>{sched_id}</code> မတွေ့ပါ။", parse_mode='HTML')
         return
+    mongo_delete_result = delete_schedule_from_mongo(sched_id)
+    if mongo_delete_result is False:
+        await update.message.reply_text(
+            "❌ MongoDB မှာ schedule မဖျက်နိုင်သေးပါ။ ခဏအကြာတွင် ထပ်စမ်းပါ။"
+        )
+        return
     sched = schedules.pop(sched_id)
     for job in context.application.job_queue.get_jobs_by_name(sched_id):
         job.schedule_removal()
     if context.application.persistence:
         await context.application.persistence.flush()
     await update.message.reply_text(f"✅ Schedule <code>{sched_id}</code> ({sched['hour']:02d}:{sched['minute']:02d}) ဖျက်ပြီးပါပြီ။", parse_mode='HTML')
+
+
+def save_schedule_to_mongo(sched_id: str, sched: dict) -> bool | None:
+    """Persist one schedule; return None when MongoDB is not configured."""
+    db = get_mongo_db()
+    if db is None:
+        return None
+    try:
+        payload = {
+            "_id": str(sched_id),
+            "hour": int(sched["hour"]),
+            "minute": int(sched["minute"]),
+            "message": str(sched["message"]),
+            "group_ids": list(sched.get("group_ids", [])),
+            "type": sched.get("type", "daily"),
+        }
+        db["schedules"].replace_one(
+            {"_id": str(sched_id)},
+            payload,
+            upsert=True,
+        )
+        return True
+    except (PyMongoError, ValueError, TypeError) as e:
+        logging.warning(f"MongoDB save_schedule error for {sched_id}: {e}")
+        return False
+
+
+def delete_schedule_from_mongo(sched_id: str) -> bool | None:
+    """Delete one schedule; return None when MongoDB is not configured."""
+    if not os.getenv("MONGO_URI"):
+        return None
+    db = get_mongo_db()
+    if db is None:
+        return False
+    try:
+        db["schedules"].delete_one({"_id": str(sched_id)})
+        return True
+    except PyMongoError as e:
+        logging.warning(f"MongoDB delete_schedule error for {sched_id}: {e}")
+        return False
+
+
+def load_persistent_schedules(bot_data: dict) -> None:
+    """Restore schedules from MongoDB and migrate legacy pickle schedules once."""
+    db = get_mongo_db()
+    if db is None:
+        return
+
+    try:
+        documents = list(db["schedules"].find({}))
+    except PyMongoError as e:
+        logging.warning(f"MongoDB load_schedules error: {e}")
+        return
+
+    mongo_schedules = {}
+    for document in documents:
+        try:
+            sched_id = str(document["_id"])
+            mongo_schedules[sched_id] = {
+                "hour": int(document["hour"]),
+                "minute": int(document["minute"]),
+                "message": str(document["message"]),
+                "group_ids": list(document.get("group_ids", [])),
+                "type": document.get("type", "daily"),
+            }
+        except (KeyError, TypeError, ValueError) as e:
+            logging.warning(f"Skipping malformed MongoDB schedule: {e}")
+
+    if mongo_schedules:
+        bot_data["schedules"] = mongo_schedules
+        logging.info(
+            f"schedules: restored {len(mongo_schedules)} schedule(s) from MongoDB"
+        )
+        return
+
+    # Migrate schedules created before MongoDB schedule persistence was added.
+    local_schedules = bot_data.get("schedules", {})
+    for sched_id, sched in local_schedules.items():
+        if save_schedule_to_mongo(sched_id, sched) is True:
+            logging.info(f"schedules: migrated legacy schedule {sched_id} to MongoDB")
 
 
 def restore_schedules(application: Application) -> None:
@@ -3308,8 +3399,9 @@ async def auto_clear_job(context: CallbackContext) -> None:
 # ============================================================
 
 async def post_init(application: Application) -> None:
-    # Restore custom_msgs + start_buttons from MongoDB (survives restarts/redeploys)
+    # Restore MongoDB-backed settings and schedules before rebuilding jobs.
     load_bot_config_from_mongo(application.bot_data)
+    load_persistent_schedules(application.bot_data)
     restore_schedules(application)
     tz = get_yangon_tz()
     application.job_queue.run_daily(
