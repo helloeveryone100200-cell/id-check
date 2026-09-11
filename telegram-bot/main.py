@@ -1230,11 +1230,13 @@ async def help_command(update: Update, context: CallbackContext) -> None:
 
 
 def _update_message(update: Update):
-    """Return the message for either a command or an inline-button update."""
-    return update.message or (
-        update.callback_query.message
-        if update.callback_query else None
-    )
+    """Return the best replyable message for any Telegram update type."""
+    effective_message = getattr(update, "effective_message", None)
+    if effective_message is not None:
+        return effective_message
+    if update.message is not None:
+        return update.message
+    return update.callback_query.message if update.callback_query else None
 
 
 async def report_form_command(update: Update, context: CallbackContext) -> None:
@@ -1524,6 +1526,12 @@ async def listbuttons_command(update: Update, context: CallbackContext) -> None:
 
 async def clear_data(update: Update, context: CallbackContext) -> None:
     message = _update_message(update)
+    if message is None:
+        logger.warning(
+            "clear_data received an update without a replyable message: %s",
+            getattr(update, "update_id", "unknown"),
+        )
+        return
     chat_id = str(update.effective_chat.id)
     today_key = get_data_key()
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
@@ -3150,6 +3158,12 @@ async def total_plus_command(update: Update, context: CallbackContext) -> None:
 async def reset_plus_command(update: Update, context: CallbackContext) -> None:
     """/reset_plus — ဤ chat ထဲးမှာ plus_counters ကိုသာ ရှင်လင်းသည်။"""
     message = _update_message(update)
+    if message is None:
+        logger.warning(
+            "reset_plus_command received an update without a replyable message: %s",
+            getattr(update, "update_id", "unknown"),
+        )
+        return
     current_chat = update.effective_chat.id
     keys_to_del = [k for k in plus_counters if k[0] == current_chat]
 
