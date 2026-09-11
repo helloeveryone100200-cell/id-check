@@ -1207,7 +1207,7 @@ async def handle_pm_math(update: Update, context: CallbackContext) -> None:
             result_str = str(result)
 
         await msg.reply_text(
-            f"🧮 <b>{text} = {result_str}</b>",
+            f"<b>{text} = {result_str}</b>",
             parse_mode='HTML'
         )
     except ValueError:
