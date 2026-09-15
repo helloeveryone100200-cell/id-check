@@ -79,6 +79,7 @@ CUSTOM_MSG_LABELS = {
     "total_plus_footer":"💬 /total_plus — Footer hint",
     "reset_plus_empty": "📊 /reset_plus — No counter message",
     "reset_plus_ok":    "✅ /reset_plus — Reset success message",
+    "plus_reaction":    "⚙️ Plus counter reaction",
     "plus_fmt":         "➕ Plus count format  ({count} သုံးပါ)",
     "digit_emoji":      "🔢 Animated number emoji (0→9 အစဉ်လိုက်)",
     # Plus / minus reply messages
@@ -549,6 +550,21 @@ async def setmsg_select(update: Update, context: CallbackContext) -> int:
 
     context.user_data["setmsg_key"] = key
     label = CUSTOM_MSG_LABELS[key]
+
+    if key == "plus_reaction":
+        current_reaction = _get_plus_reaction(context.application.bot_data)
+        await query.edit_message_text(
+            "⚙️ <b>Plus counter reaction</b>\n\n"
+            f"လက်ရှိ reaction: {current_reaction['display']}\n\n"
+            "အသုံးပြုလိုသော emoji တစ်ခုတည်းကို message အဖြစ် ပို့ပါ။\n"
+            "Telegram Premium animated emoji ကို တိုက်ရိုက်ပို့လျှင် "
+            "ID မရိုက်ဘဲ သိမ်းပေးမည်။\n\n"
+            "<i>/reset — 👍 default ပြန်ထား</i>\n"
+            "<i>/cancel — မပြောင်းဘဲ ထွက်မည်</i>",
+            parse_mode="HTML",
+        )
+        return PLUS_REACTION_AWAIT
+
     stored = _get_custom_msgs(context.application.bot_data).get(key, {})
     current = stored.get("text") or DEFAULT_MSGS.get(key, "(default)")
 
@@ -3822,6 +3838,11 @@ def main():
         states={
             SETMSG_SELECT: [
                 CallbackQueryHandler(setmsg_select, pattern=r'^setmsg_'),
+            ],
+            PLUS_REACTION_AWAIT: [
+                CommandHandler("reset", plus_reaction_receive),
+                CommandHandler("cancel", plus_reaction_cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, plus_reaction_receive),
             ],
             SETMSG_AWAIT: [
                 CommandHandler("reset", setmsg_receive),
