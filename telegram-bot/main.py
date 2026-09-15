@@ -172,11 +172,14 @@ def _get_plus_reaction(bot_data: dict) -> dict:
 
     reaction_type = stored.get("type")
     if reaction_type == "custom_emoji" and stored.get("custom_emoji_id"):
-        return {
+        config = {
             "type": "custom_emoji",
             "custom_emoji_id": str(stored["custom_emoji_id"]),
             "display": stored.get("display") or "✨",
         }
+        if stored.get("display_entities"):
+            config["display_entities"] = stored["display_entities"]
+        return config
     if reaction_type == "emoji" and stored.get("emoji"):
         return {
             "type": "emoji",
@@ -200,6 +203,7 @@ async def _set_plus_message_reaction(
     bot, chat_id: int, message_id: int, bot_data: dict
 ) -> None:
     """Apply the configured reaction without breaking the counter flow."""
+    config = _get_plus_reaction(bot_data)
     try:
         await bot.set_message_reaction(
             chat_id=chat_id,
@@ -214,6 +218,29 @@ async def _set_plus_message_reaction(
             message_id,
             exc,
         )
+        if config["type"] == "custom_emoji":
+            try:
+                await bot.set_message_reaction(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    reaction=[ReactionTypeEmoji(
+                        emoji=DEFAULT_PLUS_REACTION["emoji"]
+                    )],
+                    is_big=False,
+                )
+                logging.warning(
+                    "Custom plus reaction was rejected for %s/%s; "
+                    "default reaction was applied instead",
+                    chat_id,
+                    message_id,
+                )
+            except Exception as fallback_exc:
+                logging.warning(
+                    "Could not apply default plus reaction fallback for %s/%s: %s",
+                    chat_id,
+                    message_id,
+                    fallback_exc,
+                )
 
 
 async def _remove_plus_message_reaction(bot, chat_id: int, message_id: int) -> None:
@@ -300,24 +327,33 @@ def _shift_entities_left(entities_raw, utf16_units: int):
 
 def _extract_plus_reaction_config(message) -> dict | None:
     """Read a normal or custom emoji sent by an admin as a reaction setting."""
-    text = (message.text or message.caption or "").strip()
+    raw_text = message.text or message.caption or ""
+    text = raw_text.strip()
     entities = message.entities or message.caption_entities or []
     entities_raw = []
     for entity in entities:
         try:
-            entities_raw.append(entity.to_dict())
+            entity_dict = entity.to_dict()
         except Exception:
-            continue
+            entity_dict = {
+                "type": getattr(entity, "type", ""),
+                "offset": getattr(entity, "offset", 0),
+                "length": getattr(entity, "length", 0),
+                "custom_emoji_id": getattr(entity, "custom_emoji_id", None),
+            }
+        if entity_dict:
+            entities_raw.append(entity_dict)
 
     entity, custom_emoji_id = _first_custom_emoji_entity(entities_raw)
     if custom_emoji_id:
-        remaining = _remove_entity_from_text(text, entity).strip()
+        remaining = _remove_entity_from_text(raw_text, entity).strip()
         if remaining:
             return None
         return {
             "type": "custom_emoji",
             "custom_emoji_id": custom_emoji_id,
             "display": text or "✨",
+            "display_entities": [entity],
         }
 
     if not text or "\n" in text or len(text) > 16 or len(text.split()) != 1:
@@ -381,9 +417,14 @@ async def plus_reaction_receive(update: Update, context: CallbackContext) -> int
     if context.application.persistence:
         await context.application.persistence.flush()
     save_bot_config_to_mongo(bot_data)
-    await msg.reply_text(
-        f"✅ Plus counter reaction သတ်မှတ်ပြီးပါပြီ: {config['display']}"
-    )
+    confirmation_text, confirmation_entities = _plus_reaction_confirmation(config)
+    if confirmation_entities:
+        await msg.reply_text(
+            confirmation_text,
+            entities=confirmation_entities,
+        )
+    else:
+        await msg.reply_text(confirmation_text)
     return ConversationHandler.END
 
 
@@ -444,6 +485,23 @@ def _build_entities(entities_raw: list):
         except Exception:
             pass
     return result or None
+
+
+def _plus_reaction_confirmation(config: dict) -> tuple[str, list | None]:
+    """Build a confirmation while preserving a custom emoji entity."""
+    prefix = "✅ Plus counter reaction သတ်မှတ်ပြီးပါပြီ: "
+    text = prefix + config.get("display", "")
+    entities_raw = config.get("display_entities") or []
+    if not entities_raw:
+        return text, None
+
+    prefix_units = len(prefix.encode("utf-16-le")) // 2
+    shifted = []
+    for entity in entities_raw:
+        item = dict(entity)
+        item["offset"] = int(item.get("offset", 0)) + prefix_units
+        shifted.append(item)
+    return text, _build_entities(shifted)
 
 
 async def _reply_custom(message, bot_data: dict, key: str,
