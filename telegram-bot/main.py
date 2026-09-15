@@ -502,15 +502,20 @@ async def _edit_custom(query, bot_data: dict, key: str,
 
 async def setmsg_start(update: Update, context: CallbackContext) -> int:
     user = update.effective_user
-    if not user or not _is_owner(user.id):
-        await update.message.reply_text("❌ Bot owner သာ ဤ command ကို သုံးနိုင်သည်။")
+    if not user or not _is_owner_or_admin(user.id):
+        await update.message.reply_text("❌ Bot owner/admin သာ ဤ command ကို သုံးနိုင်သည်။")
         return ConversationHandler.END
     if update.effective_chat.type != "private":
         await update.message.reply_text("❌ Bot PM ထဲတွင်သာ အသုံးပြုနိုင်သည်။")
         return ConversationHandler.END
 
     keyboard = []
-    for key, label in CUSTOM_MSG_LABELS.items():
+    labels = (
+        CUSTOM_MSG_LABELS.items()
+        if _is_owner(user.id)
+        else [("plus_reaction", CUSTOM_MSG_LABELS["plus_reaction"])]
+    )
+    for key, label in labels:
         custom_emoji_id = _get_first_custom_emoji_id(
             context.application.bot_data, key
         )
