@@ -24,7 +24,8 @@ from telegram.ext import (
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
     KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove,
-    InputFile, BotCommand, MessageEntity
+    InputFile, BotCommand, MessageEntity,
+    ReactionTypeEmoji, ReactionTypeCustomEmoji
 )
 from telegram.ext import CallbackContext
 from web_server import keep_alive
@@ -58,6 +59,7 @@ BOT_SETTINGS_PHOTO    = 42
 SETMSG_SELECT = 60
 SETMSG_AWAIT  = 61
 STARTBTN_AWAIT = 70
+PLUS_REACTION_AWAIT = 80
 
 
 # ============================================================
@@ -149,6 +151,87 @@ def _is_owner(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
 
+def _is_owner_or_admin(user_id: int) -> bool:
+    """Allow both the configured owner and every configured admin."""
+    return user_id in ADMIN_IDS or _is_owner(user_id)
+
+
+DEFAULT_PLUS_REACTION = {
+    "type": "emoji",
+    "emoji": "👍",
+    "display": "👍",
+}
+
+
+def _get_plus_reaction(bot_data: dict) -> dict:
+    """Return the configured reaction, falling back to a normal thumbs-up."""
+    stored = bot_data.get("plus_reaction")
+    if not isinstance(stored, dict):
+        return dict(DEFAULT_PLUS_REACTION)
+
+    reaction_type = stored.get("type")
+    if reaction_type == "custom_emoji" and stored.get("custom_emoji_id"):
+        return {
+            "type": "custom_emoji",
+            "custom_emoji_id": str(stored["custom_emoji_id"]),
+            "display": stored.get("display") or "✨",
+        }
+    if reaction_type == "emoji" and stored.get("emoji"):
+        return {
+            "type": "emoji",
+            "emoji": str(stored["emoji"]),
+            "display": stored.get("display") or str(stored["emoji"]),
+        }
+    return dict(DEFAULT_PLUS_REACTION)
+
+
+def _build_plus_reaction(bot_data: dict):
+    """Build the Telegram reaction object from the saved config."""
+    config = _get_plus_reaction(bot_data)
+    if config["type"] == "custom_emoji":
+        return ReactionTypeCustomEmoji(
+            custom_emoji_id=config["custom_emoji_id"]
+        )
+    return ReactionTypeEmoji(emoji=config["emoji"])
+
+
+async def _set_plus_message_reaction(
+    bot, chat_id: int, message_id: int, bot_data: dict
+) -> None:
+    """Apply the configured reaction without breaking the counter flow."""
+    try:
+        await bot.set_message_reaction(
+            chat_id=chat_id,
+            message_id=message_id,
+            reaction=[_build_plus_reaction(bot_data)],
+            is_big=False,
+        )
+    except Exception as exc:
+        logging.warning(
+            "Could not set plus reaction for %s/%s: %s",
+            chat_id,
+            message_id,
+            exc,
+        )
+
+
+async def _remove_plus_message_reaction(bot, chat_id: int, message_id: int) -> None:
+    """Remove the bot's reaction from a message."""
+    try:
+        await bot.set_message_reaction(
+            chat_id=chat_id,
+            message_id=message_id,
+            reaction=[],
+        )
+    except Exception as exc:
+        logging.warning(
+            "Could not remove plus reaction for %s/%s: %s",
+            chat_id,
+            message_id,
+            exc,
+        )
+
+
 def _get_custom_msgs(bot_data: dict) -> dict:
     return bot_data.setdefault("custom_msgs", {})
 
@@ -212,6 +295,103 @@ def _shift_entities_left(entities_raw, utf16_units: int):
         item["offset"] = max(0, int(item.get("offset", 0)) - utf16_units)
         shifted.append(item)
     return shifted
+
+
+def _extract_plus_reaction_config(message) -> dict | None:
+    """Read a normal or custom emoji sent by an admin as a reaction setting."""
+    text = (message.text or message.caption or "").strip()
+    entities = message.entities or message.caption_entities or []
+    entities_raw = []
+    for entity in entities:
+        try:
+            entities_raw.append(entity.to_dict())
+        except Exception:
+            continue
+
+    entity, custom_emoji_id = _first_custom_emoji_entity(entities_raw)
+    if custom_emoji_id:
+        remaining = _remove_entity_from_text(text, entity).strip()
+        if remaining:
+            return None
+        return {
+            "type": "custom_emoji",
+            "custom_emoji_id": custom_emoji_id,
+            "display": text or "✨",
+        }
+
+    if not text or "\n" in text or len(text) > 16 or len(text.split()) != 1:
+        return None
+    return {
+        "type": "emoji",
+        "emoji": text,
+        "display": text,
+    }
+
+
+async def plus_reaction_start(update: Update, context: CallbackContext) -> int:
+    """Start the admin flow for choosing the reaction used by + replies."""
+    user = update.effective_user
+    if not user or not _is_owner_or_admin(user.id):
+        return ConversationHandler.END
+
+    current = _get_plus_reaction(context.application.bot_data)
+    await update.message.reply_text(
+        "⚙️ Plus counter reaction သတ်မှတ်ခြင်း\n\n"
+        f"လက်ရှိ reaction: {current['display']}\n\n"
+        "အသုံးပြုလိုသော emoji တစ်ခုတည်းကို message အဖြစ် ပို့ပါ။\n"
+        "Telegram Premium animated emoji ကို တိုက်ရိုက်ပို့လျှင် ID မရိုက်ဘဲ သိမ်းပေးမည်။\n\n"
+        "/reset — 👍 default ပြန်ထား\n"
+        "/cancel — မပြောင်းဘဲ ထွက်မည်",
+    )
+    return PLUS_REACTION_AWAIT
+
+
+async def plus_reaction_receive(update: Update, context: CallbackContext) -> int:
+    """Save the emoji/custom emoji sent by an admin."""
+    msg = update.message
+    if not msg:
+        return PLUS_REACTION_AWAIT
+
+    text = (msg.text or "").strip()
+    if text in ("/cancel", "cancel"):
+        await msg.reply_text("❌ Plus reaction ပြောင်းလဲမှုကို cancel လုပ်လိုက်ပါပြီ။")
+        return ConversationHandler.END
+
+    bot_data = context.application.bot_data
+    if text == "/reset":
+        bot_data.pop("plus_reaction", None)
+        if context.application.persistence:
+            await context.application.persistence.flush()
+        save_bot_config_to_mongo(bot_data)
+        await msg.reply_text(
+            f"✅ Plus reaction ကို default {DEFAULT_PLUS_REACTION['display']} သို့ ပြန်ထားပြီးပါပြီ။"
+        )
+        return ConversationHandler.END
+
+    config = _extract_plus_reaction_config(msg)
+    if config is None:
+        await msg.reply_text(
+            "❌ Emoji တစ်ခုတည်းကိုသာ ပို့ပါ။\n"
+            "Custom animated emoji ကို Telegram emoji keyboard မှ တိုက်ရိုက်ပို့နိုင်ပါသည်။"
+        )
+        return PLUS_REACTION_AWAIT
+
+    bot_data["plus_reaction"] = config
+    if context.application.persistence:
+        await context.application.persistence.flush()
+    save_bot_config_to_mongo(bot_data)
+    await msg.reply_text(
+        f"✅ Plus counter reaction သတ်မှတ်ပြီးပါပြီ: {config['display']}"
+    )
+    return ConversationHandler.END
+
+
+async def plus_reaction_cancel(update: Update, context: CallbackContext) -> int:
+    if update.message:
+        await update.message.reply_text(
+            "❌ Plus reaction ပြောင်းလဲမှုကို cancel လုပ်လိုက်ပါပြီ။"
+        )
+    return ConversationHandler.END
 
 
 def _start_button_markup(button: dict) -> InlineKeyboardButton:
@@ -908,6 +1088,7 @@ def save_bot_config_to_mongo(bot_data: dict) -> None:
             "_id":          "bot_config",
             "custom_msgs":  bot_data.get("custom_msgs", {}),
             "start_buttons": bot_data.get("start_buttons", []),
+            "plus_reaction": _get_plus_reaction(bot_data),
         }
         db["bot_config"].replace_one({"_id": "bot_config"}, payload, upsert=True)
         logging.info("bot_config saved to MongoDB")
@@ -929,6 +1110,9 @@ def load_bot_config_from_mongo(bot_data: dict) -> None:
             if "start_buttons" in doc:
                 bot_data["start_buttons"] = doc["start_buttons"]
                 logging.info(f"bot_config: restored {len(doc['start_buttons'])} start_buttons from MongoDB")
+            if "plus_reaction" in doc:
+                bot_data["plus_reaction"] = doc["plus_reaction"]
+                logging.info("bot_config: restored plus reaction from MongoDB")
         else:
             logging.info("bot_config: no saved config in MongoDB (first run)")
     except PyMongoError as e:
@@ -2961,6 +3145,12 @@ async def handle_plus_reply(update: Update, context: CallbackContext) -> None:
     count_key = (chat_id, sender_id)
 
     if msg_key in plus_counted_msgs:
+        await _set_plus_message_reaction(
+            context.application.bot,
+            chat_id,
+            original.message_id,
+            context.application.bot_data,
+        )
         given_count = plus_counted_msgs[msg_key]["count"]
         await _reply_custom_animated(
             original, context.application.bot_data, "plus_already",
@@ -2973,6 +3163,12 @@ async def handle_plus_reply(update: Update, context: CallbackContext) -> None:
     count = plus_counters[count_key]
     plus_counted_msgs[msg_key] = {"count": count, "sender_id": sender_id}
     save_plus_data()
+    await _set_plus_message_reaction(
+        context.application.bot,
+        chat_id,
+        original.message_id,
+        context.application.bot_data,
+    )
     await _reply_custom_plus(original, context.application.bot_data, count)
 
 
@@ -3020,6 +3216,11 @@ async def handle_minus_reply(update: Update, context: CallbackContext) -> None:
     if count_key in plus_counters and plus_counters[count_key] > 0:
         plus_counters[count_key] -= 1
     save_plus_data()
+    await _remove_plus_message_reaction(
+        context.application.bot,
+        chat_id,
+        original.message_id,
+    )
     await _reply_custom_animated(
         original, context.application.bot_data, "minus_del_plus",
         animated_counts={"given_count": given_count},
@@ -3432,6 +3633,7 @@ async def post_init(application: Application) -> None:
         BotCommand("form",           "Report template"),
         BotCommand("total_plus",     "Plus counter ကြည့်"),
         BotCommand("reset_plus",     "Plus counter ရှင်း"),
+        BotCommand("setplusreaction", "Plus reaction သတ်မှတ် (Admin)"),
         BotCommand("feedback",       "Admin ထံ မှတ်ချက်"),
         BotCommand("hidemenu",       "Keyboard ဖျောက်"),
         BotCommand("help",           "Help"),
@@ -3564,6 +3766,28 @@ def main():
     application.add_handler(CommandHandler("total_plus", total_plus_command))
     application.add_handler(CommandHandler("reset_plus", reset_plus_command))
     application.add_handler(CallbackQueryHandler(resetplus_callback, pattern=r'^resetplus_(confirm|cancel)$'))
+    plus_reaction_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler(
+                "setplusreaction",
+                plus_reaction_start,
+                filters=filters.ChatType.PRIVATE,
+            ),
+        ],
+        states={
+            PLUS_REACTION_AWAIT: [
+                CommandHandler("reset", plus_reaction_receive),
+                CommandHandler("cancel", plus_reaction_cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, plus_reaction_receive),
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", plus_reaction_cancel),
+        ],
+        allow_reentry=True,
+        per_message=False,
+    )
+    application.add_handler(plus_reaction_handler)
 
     application.add_handler(CallbackQueryHandler(clear_group_data_callback, pattern=r'^admin_clear_-?\d+$'))
     application.add_handler(CallbackQueryHandler(cancel_group_action, pattern='^admin_cancel$'))
