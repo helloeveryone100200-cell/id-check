@@ -1673,7 +1673,7 @@ async def main_menu_command(
             [InlineKeyboardButton("➕ Add me to your chat!", url=f"https://t.me/{bot_username}?startgroup=true", style="primary")],
         ]
         for btn in context.application.bot_data['start_buttons']:
-            inline_rows.append(_start_button_markup(btn))
+            inline_rows.append([_start_button_markup(btn)])
 
         inline_kb = InlineKeyboardMarkup(inline_rows)
         await _reply_custom(
