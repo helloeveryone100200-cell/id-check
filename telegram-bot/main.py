@@ -1602,7 +1602,7 @@ async def handle_pm_math(update: Update, context: CallbackContext) -> None:
 # ============================================================
 
 async def start(update: Update, context: CallbackContext) -> None:
-    await main_menu_command(update, context)
+    await main_menu_command(update, context, show_welcome=True)
 
 
 async def help_command(update: Update, context: CallbackContext) -> None:
@@ -1631,7 +1631,9 @@ async def report_form_command(update: Update, context: CallbackContext) -> None:
     )
 
 
-async def main_menu_command(update: Update, context: CallbackContext) -> None:
+async def main_menu_command(
+    update: Update, context: CallbackContext, show_welcome: bool = False
+) -> None:
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
 
     keyboard = [
@@ -1653,31 +1655,31 @@ async def main_menu_command(update: Update, context: CallbackContext) -> None:
     reply_markup = ReplyKeyboardMarkup(
         keyboard, resize_keyboard=True, one_time_keyboard=False
     )
-    user_name = update.effective_user.full_name if update.effective_user else "User"
+    if show_welcome:
+        user_name = update.effective_user.full_name if update.effective_user else "User"
+        bot_username = context.bot.username
 
-    bot_username = context.bot.username
+        # Load dynamic buttons; initialise defaults on first run
+        if 'start_buttons' not in context.application.bot_data:
+            context.application.bot_data['start_buttons'] = [
+                {"text": "🔞 Blue Bot", "url": "https://t.me/blue_xxx69_bot?start=7157442403"},
+                {"text": "📝 Note bot", "url": "https://t.me/chanmyae1539_bot?start=ref_7196380140"},
+            ]
+            if context.application.persistence:
+                await context.application.persistence.flush()
+            save_bot_config_to_mongo(context.application.bot_data)
 
-    # Load dynamic buttons; initialise defaults on first run
-    if 'start_buttons' not in context.application.bot_data:
-        context.application.bot_data['start_buttons'] = [
-            {"text": "🔞 Blue Bot", "url": "https://t.me/blue_xxx69_bot?start=7157442403"},
-            {"text": "📝 Note bot", "url": "https://t.me/chanmyae1539_bot?start=ref_7196380140"},
+        inline_rows = [
+            [InlineKeyboardButton("➕ Add me to your chat!", url=f"https://t.me/{bot_username}?startgroup=true", style="primary")],
         ]
-        if context.application.persistence:
-            await context.application.persistence.flush()
-        save_bot_config_to_mongo(context.application.bot_data)
+        for btn in context.application.bot_data['start_buttons']:
+            inline_rows.append(_start_button_markup(btn))
 
-    inline_rows = [
-        [InlineKeyboardButton("➕ Add me to your chat!", url=f"https://t.me/{bot_username}?startgroup=true", style="primary")],
-    ]
-    for btn in context.application.bot_data['start_buttons']:
-        inline_rows.append([_start_button_markup(btn)])
-
-    inline_kb = InlineKeyboardMarkup(inline_rows)
-    await _reply_custom(
-        update.message, context.application.bot_data, "welcome",
-        reply_markup=inline_kb, name=user_name
-    )
+        inline_kb = InlineKeyboardMarkup(inline_rows)
+        await _reply_custom(
+            update.message, context.application.bot_data, "welcome",
+            reply_markup=inline_kb, name=user_name
+        )
     await update.message.reply_text("Menu", reply_markup=reply_markup)
 
 
