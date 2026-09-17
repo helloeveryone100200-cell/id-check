@@ -95,6 +95,8 @@ CUSTOM_MSG_LABELS = {
     "daqiang_reply":    "🎯 打枪/သာချန်း reply ({username_value} နှင့် {sender_mention} သုံးနိုင်)",
     # Green alert
     "green_alert":      "🟢 Green alert ({count} သုံးနိုင်)",
+    # Scheduled admin notification
+    "auto_clear":       "🧹 Auto Clear — daily admin notification",
 }
 
 DEFAULT_MSGS: dict = {
@@ -140,6 +142,13 @@ DEFAULT_MSGS: dict = {
     "daqiang_reply":     "{username_value}\n\n{sender_mention} ဒီ client ကို သင့်ဘက်မှာ မှတ်သားထားဖို့ မမေ့ပါနဲ့",
     # Green alert
     "green_alert":       "ဒီနေ့ Green ပေးပို့သည်မှာ {count} ယောက် ရှိပါပြီ။\n\nTarget ပြည့်ချင်ရင် လူကောင်းရှာဖို့ အကြံပြုပါသည်။",
+    # Scheduled admin notification
+    "auto_clear": (
+        "🤖 <b>Auto Clear ပြုလုပ်ပြီးပါပြီ</b>\n\n"
+        "⏰ နေ့လည် 12:00 (Yangon)\n"
+        "🗑️ Shift: <b>{prev_key}</b> data ရှင်းပြီးပါပြီ\n"
+        "📊 {cleared_count} group(s) cleared"
+    ),
 }
 
 
@@ -525,6 +534,24 @@ async def _reply_custom(message, bot_data: dict, key: str,
         await message.reply_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
 
 
+async def _send_custom(bot, chat_id: int, bot_data: dict, key: str,
+                       parse_mode=None, **fmt):
+    """Send a customisable bot notification, preserving emoji entities."""
+    stored = _get_custom_msgs(bot_data).get(key, {})
+    raw_text = stored.get("text") or DEFAULT_MSGS.get(key, "")
+    raw_entities = stored.get("entities")
+
+    text, adj_entities_raw = _apply_fmt_and_adjust_entities(
+        raw_text, raw_entities, **fmt
+    )
+    entities = _build_entities(adj_entities_raw) if adj_entities_raw else None
+
+    if entities:
+        await bot.send_message(chat_id=chat_id, text=text, entities=entities)
+    else:
+        await bot.send_message(chat_id=chat_id, text=text, parse_mode=parse_mode)
+
+
 async def _edit_custom(query, bot_data: dict, key: str,
                        reply_markup=None, parse_mode=None, **fmt):
     """Edit a callback message while preserving custom emoji entities.
@@ -703,11 +730,31 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
 
     label = CUSTOM_MSG_LABELS.get(key, key)
     emoji_note = " ✨ (Premium emoji သိမ်းဆည်းပြီး)" if entities_raw else ""
-    await msg.reply_text(
-        f"✅ <b>{label}</b> — သိမ်းဆည်းပြီးပါပြီ!{emoji_note}\n\n"
-        f"<blockquote>{text[:500]}</blockquote>",
-        parse_mode="HTML"
-    )
+    confirmation_prefix = f"✅ {label} — သိမ်းဆည်းပြီးပါပြီ!{emoji_note}\n\n"
+    confirmation_text = confirmation_prefix + text[:500]
+    confirmation_entities = None
+    if entities_raw:
+        prefix_units = len(confirmation_prefix.encode("utf-16-le")) // 2
+        confirmation_entities = _build_entities([
+            {
+                **entity,
+                "offset": int(entity.get("offset", 0)) + prefix_units,
+            }
+            for entity in entities_raw
+            if int(entity.get("offset", 0)) + int(entity.get("length", 0))
+            <= len(text[:500].encode("utf-16-le")) // 2
+        ])
+    if confirmation_entities:
+        await msg.reply_text(
+            confirmation_text,
+            entities=confirmation_entities,
+        )
+    else:
+        await msg.reply_text(
+            f"✅ <b>{label}</b> — သိမ်းဆည်းပြီးပါပြီ!{emoji_note}\n\n"
+            f"<blockquote>{text[:500]}</blockquote>",
+            parse_mode="HTML",
+        )
     return ConversationHandler.END
 
 
@@ -3675,15 +3722,14 @@ async def auto_clear_job(context: CallbackContext) -> None:
 
     for admin_id in ADMIN_IDS:
         try:
-            await context.application.bot.send_message(
-                chat_id=admin_id,
-                text=(
-                    f"🤖 <b>Auto Clear ပြုလုပ်ပြီးပါပြီ</b>\n\n"
-                    f"⏰ နေ့လည် 12:00 (Yangon)\n"
-                    f"🗑️ Shift: <b>{prev_key}</b> data ရှင်းပြီးပါပြီ\n"
-                    f"📊 {cleared_count} group(s) cleared"
-                ),
-                parse_mode='HTML'
+            await _send_custom(
+                context.application.bot,
+                admin_id,
+                context.application.bot_data,
+                "auto_clear",
+                parse_mode="HTML",
+                prev_key=prev_key,
+                cleared_count=cleared_count,
             )
         except Exception as e:
             logging.warning(f"auto_clear_job notify admin {admin_id}: {e}")
