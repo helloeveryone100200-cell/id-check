@@ -60,6 +60,10 @@ SETMSG_SELECT = 60
 SETMSG_AWAIT  = 61
 STARTBTN_AWAIT = 70
 PLUS_REACTION_AWAIT = 80
+NUMBER_WORDS_AWAIT = 90
+
+NUMBER_WORDS_BUTTON = "Numbers to Words Converter"
+NUMBER_WORDS_CANCEL = "Cancel"
 
 
 # ============================================================
@@ -1635,6 +1639,7 @@ async def main_menu_command(update: Update, context: CallbackContext) -> None:
             KeyboardButton("Clear All", style="success"),
             KeyboardButton("Reset Plus All", style="success"),
         ],
+        [KeyboardButton(NUMBER_WORDS_BUTTON, style="primary")],
         [KeyboardButton("Hide Menu", style="danger")],
     ]
     reply_markup = ReplyKeyboardMarkup(
@@ -1666,6 +1671,111 @@ async def main_menu_command(update: Update, context: CallbackContext) -> None:
         reply_markup=inline_kb, name=user_name
     )
     await update.message.reply_text("Menu", reply_markup=reply_markup)
+
+
+_NUMBER_WORDS_ONES = (
+    "zero", "one", "two", "three", "four", "five", "six", "seven",
+    "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen",
+    "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
+)
+_NUMBER_WORDS_TENS = (
+    "", "", "twenty", "thirty", "forty", "fifty",
+    "sixty", "seventy", "eighty", "ninety",
+)
+_NUMBER_WORDS_SCALES = (
+    "", "thousand", "million", "billion", "trillion",
+    "quadrillion", "quintillion", "sextillion",
+)
+
+
+def _under_thousand_to_words(number: int) -> str:
+    if number < 20:
+        return _NUMBER_WORDS_ONES[number]
+    if number < 100:
+        tens, remainder = divmod(number, 10)
+        return _NUMBER_WORDS_TENS[tens] + (
+            f"-{_NUMBER_WORDS_ONES[remainder]}" if remainder else ""
+        )
+    hundreds, remainder = divmod(number, 100)
+    result = f"{_NUMBER_WORDS_ONES[hundreds]} hundred"
+    return f"{result} {_under_thousand_to_words(remainder)}" if remainder else result
+
+
+def _number_to_words(number: int) -> str | None:
+    """Convert an integer to English words without using an external package."""
+    if number == 0:
+        return "zero"
+
+    sign = "minus " if number < 0 else ""
+    remaining = abs(number)
+    groups = []
+    scale_index = 0
+
+    while remaining:
+        chunk = remaining % 1000
+        if chunk:
+            if scale_index >= len(_NUMBER_WORDS_SCALES):
+                return None
+            chunk_words = _under_thousand_to_words(chunk)
+            scale = _NUMBER_WORDS_SCALES[scale_index]
+            groups.append(f"{chunk_words} {scale}".strip())
+        remaining //= 1000
+        scale_index += 1
+
+    return sign + " ".join(reversed(groups))
+
+
+def _number_words_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        [[KeyboardButton(NUMBER_WORDS_CANCEL, style="danger")]],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
+
+
+async def number_words_start(update: Update, context: CallbackContext) -> int:
+    await update.message.reply_text(
+        "Numbers to Words Converter လုပ်လိုသည့်နံပါတ် ပေးပို့ပါ။\n\n"
+        "Example:  1048    →   one thousand forty-eight\n\n"
+        "မဆက်လုပ်လိုပါက Cancel ကိုနှိပ်ပါ။",
+        reply_markup=_number_words_keyboard(),
+    )
+    return NUMBER_WORDS_AWAIT
+
+
+async def number_words_receive(update: Update, context: CallbackContext) -> int:
+    raw = (update.message.text or "").strip()
+
+    if raw.casefold() in {
+        NUMBER_WORDS_CANCEL.casefold(),
+        f"/{NUMBER_WORDS_CANCEL}".casefold(),
+    }:
+        await main_menu_command(update, context)
+        return ConversationHandler.END
+
+    normalized = raw.replace(",", "").replace(" ", "")
+    if not re.fullmatch(r"[+-]?\d+", normalized):
+        await update.message.reply_text(
+            "❌ ကျေးဇူးပြု၍ integer number တစ်ခုသာ ပေးပို့ပါ။\n"
+            "ဥပမာ: 1048",
+            reply_markup=_number_words_keyboard(),
+        )
+        return NUMBER_WORDS_AWAIT
+
+    number = int(normalized)
+    words = _number_to_words(number)
+    if words is None:
+        await update.message.reply_text(
+            "❌ ဤနံပါတ်သည် လက်ရှိ converter အတွက် အလွန်ကြီးလွန်းပါသည်။",
+            reply_markup=_number_words_keyboard(),
+        )
+        return NUMBER_WORDS_AWAIT
+
+    await update.message.reply_text(
+        f"{number} → {words}",
+        reply_markup=_number_words_keyboard(),
+    )
+    return NUMBER_WORDS_AWAIT
 
 
 async def main_menu_text_handler(update: Update, context: CallbackContext) -> None:
@@ -3910,6 +4020,27 @@ def main():
 
     application.add_handler(CommandHandler("menu", main_menu_command))
     application.add_handler(CommandHandler("hidemenu", remove_menu))
+    number_words_handler = ConversationHandler(
+        entry_points=[
+            MessageHandler(
+                filters.TEXT
+                & filters.Regex(r"^Numbers to Words Converter$")
+                & filters.ChatType.PRIVATE,
+                number_words_start,
+            ),
+        ],
+        states={
+            NUMBER_WORDS_AWAIT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, number_words_receive),
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", number_words_receive),
+        ],
+        allow_reentry=True,
+        per_message=False,
+    )
+    application.add_handler(number_words_handler)
     application.add_handler(MessageHandler(
         filters.TEXT & filters.Regex(
             r'^(Showdata|Total Plus|Clear Data|Reset Plus|Clear All|Reset Plus All|Hide Menu)$'
