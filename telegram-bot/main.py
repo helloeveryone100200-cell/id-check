@@ -101,6 +101,8 @@ CUSTOM_MSG_LABELS = {
     "green_alert":      "🟢 Green alert ({count} သုံးနိုင်)",
     # Scheduled admin notification
     "auto_clear":       "🧹 Auto Clear — daily admin notification",
+    # Numbers to words converter
+    "number_words_prompt": "🔢 Numbers to Words Converter prompt",
 }
 
 DEFAULT_MSGS: dict = {
@@ -152,6 +154,12 @@ DEFAULT_MSGS: dict = {
         "⏰ နေ့လည် 12:00 (Yangon)\n"
         "🗑️ Shift: <b>{prev_key}</b> data ရှင်းပြီးပါပြီ\n"
         "📊 {cleared_count} group(s) cleared"
+    ),
+    # Numbers to words converter
+    "number_words_prompt": (
+        "Numbers to Words Converter လုပ်လိုသည့်နံပါတ် ပေးပို့ပါ။\n\n"
+        "Example:  1048    →   one thousand forty-eight\n\n"
+        "မဆက်လုပ်လိုပါက Cancel ကိုနှိပ်ပါ။"
     ),
 }
 
@@ -1734,10 +1742,10 @@ def _number_words_keyboard() -> ReplyKeyboardMarkup:
 
 
 async def number_words_start(update: Update, context: CallbackContext) -> int:
-    await update.message.reply_text(
-        "Numbers to Words Converter လုပ်လိုသည့်နံပါတ် ပေးပို့ပါ။\n\n"
-        "Example:  1048    →   one thousand forty-eight\n\n"
-        "မဆက်လုပ်လိုပါက Cancel ကိုနှိပ်ပါ။",
+    await _reply_custom(
+        update.message,
+        context.application.bot_data,
+        "number_words_prompt",
         reply_markup=_number_words_keyboard(),
     )
     return NUMBER_WORDS_AWAIT
