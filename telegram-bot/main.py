@@ -70,7 +70,7 @@ CUSTOM_MSG_LABELS = {
     "welcome":          "🏠 Welcome / Start Message",
     "help":             "❓ Help Message",
     "hidemenu":         "🙈 Hide Menu Message",
-    "form":             "📋 /form — Report template intro",
+    "form":             "📋 /form — Full report template",
     "cleardata_ok":     "✅ /cleardata — Data deleted message",
     "cleardata_empty":  "📭 /cleardata — No data message",
     "showdata_empty":   "📭 /showdata — No data message",
@@ -470,6 +470,21 @@ def get_msg(bot_data: dict, key: str, **fmt) -> str:
     return _safe_substitute(text, **fmt) if fmt else text
 
 
+def _get_form_message_payload(bot_data: dict) -> tuple[str, list | None]:
+    """Return the complete /form message and its stored Telegram entities.
+
+    Older configurations stored only the intro and relied on REPORT_TEMPLATE
+    being appended by the command. New /setmsg configurations store the
+    complete form, so both formats remain compatible across deployments.
+    """
+    stored = _get_custom_msgs(bot_data).get("form", {})
+    text = stored.get("text") or DEFAULT_MSGS.get("form", "")
+    entities = stored.get("entities")
+    if not stored.get("includes_template"):
+        text += REPORT_TEMPLATE
+    return text, entities
+
+
 def _build_entities(entities_raw: list):
     """Construct MessageEntity objects directly from stored dicts.
 
@@ -658,7 +673,13 @@ async def setmsg_select(update: Update, context: CallbackContext) -> int:
         return PLUS_REACTION_AWAIT
 
     stored = _get_custom_msgs(context.application.bot_data).get(key, {})
-    current = stored.get("text") or DEFAULT_MSGS.get(key, "(default)")
+    if key == "form":
+        current, current_entities = _get_form_message_payload(
+            context.application.bot_data
+        )
+    else:
+        current = stored.get("text") or DEFAULT_MSGS.get(key, "(default)")
+        current_entities = stored.get("entities")
 
     if key == "digit_emoji":
         digit_map = _get_digit_map(context.application.bot_data)
@@ -678,7 +699,7 @@ async def setmsg_select(update: Update, context: CallbackContext) -> int:
         )
         return SETMSG_AWAIT
 
-    stored_entities = stored.get("entities") or []
+    stored_entities = current_entities or []
     if stored_entities:
         preview = current[:800]
         prefix = (
@@ -756,7 +777,12 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
             entities_raw = None
 
     custom = _get_custom_msgs(context.application.bot_data)
-    custom[key] = {"text": text, "entities": entities_raw}
+    message_config = {"text": text, "entities": entities_raw}
+    if key == "form":
+        # /form now stores the complete user-provided message, including all
+        # report fields after the intro.
+        message_config["includes_template"] = True
+    custom[key] = message_config
     if context.application.persistence:
         await context.application.persistence.flush()
     save_bot_config_to_mongo(context.application.bot_data)
@@ -1584,11 +1610,12 @@ def _update_message(update: Update):
 
 async def report_form_command(update: Update, context: CallbackContext) -> None:
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
+    stored = _get_custom_msgs(context.application.bot_data).get("form", {})
     await _reply_custom(
         update.message,
         context.application.bot_data,
         "form",
-        suffix=REPORT_TEMPLATE,
+        suffix="" if stored.get("includes_template") else REPORT_TEMPLATE,
     )
 
 
