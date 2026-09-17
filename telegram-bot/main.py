@@ -514,7 +514,8 @@ def _plus_reaction_confirmation(config: dict) -> tuple[str, list | None]:
 
 
 async def _reply_custom(message, bot_data: dict, key: str,
-                        reply_markup=None, parse_mode=None, **fmt):
+                        reply_markup=None, parse_mode=None, suffix="",
+                        **fmt):
     """Reply with a customisable message, preserving premium-emoji entities.
 
     Entity offsets are adjusted automatically when format placeholders
@@ -525,6 +526,7 @@ async def _reply_custom(message, bot_data: dict, key: str,
     raw_entities = stored.get("entities")
 
     text, adj_entities_raw = _apply_fmt_and_adjust_entities(raw_text, raw_entities, **fmt)
+    text += suffix
 
     entities = _build_entities(adj_entities_raw) if adj_entities_raw else None
 
@@ -675,6 +677,37 @@ async def setmsg_select(update: Update, context: CallbackContext) -> int:
             parse_mode="HTML"
         )
         return SETMSG_AWAIT
+
+    stored_entities = stored.get("entities") or []
+    if stored_entities:
+        preview = current[:800]
+        prefix = (
+            f"📝 {label}\n\n"
+            "လက်ရှိ message:\n"
+        )
+        suffix = (
+            "\n\n"
+            "✏️ အသစ်ရိုက်ထည့်ပါ (Premium animated emoji ပါ တိုက်ရိုက်ထည့်နိုင်သည်)\n\n"
+            "/reset — default ပြန်ထား\n"
+            "/cancel — ဖျက်သိမ်း"
+        )
+        preview_units = len(preview.encode("utf-16-le")) // 2
+        prefix_units = len(prefix.encode("utf-16-le")) // 2
+        preview_entities = _build_entities([
+            {
+                **entity,
+                "offset": int(entity.get("offset", 0)) + prefix_units,
+            }
+            for entity in stored_entities
+            if int(entity.get("offset", 0)) + int(entity.get("length", 0))
+            <= preview_units
+        ])
+        if preview_entities:
+            await query.edit_message_text(
+                prefix + preview + suffix,
+                entities=preview_entities,
+            )
+            return SETMSG_AWAIT
 
     await query.edit_message_text(
         f"📝 <b>{label}</b>\n\n"
@@ -1551,8 +1584,12 @@ def _update_message(update: Update):
 
 async def report_form_command(update: Update, context: CallbackContext) -> None:
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
-    intro = get_msg(context.application.bot_data, "form")
-    await update.message.reply_text(intro + REPORT_TEMPLATE)
+    await _reply_custom(
+        update.message,
+        context.application.bot_data,
+        "form",
+        suffix=REPORT_TEMPLATE,
+    )
 
 
 async def main_menu_command(update: Update, context: CallbackContext) -> None:
