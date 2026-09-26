@@ -4,6 +4,7 @@ import io
 import math
 import logging
 import asyncio
+from html import escape as html_escape
 import threading
 import pytz
 import requests
@@ -60,10 +61,8 @@ SETMSG_SELECT = 60
 SETMSG_AWAIT  = 61
 STARTBTN_AWAIT = 70
 PLUS_REACTION_AWAIT = 80
-NUMBER_WORDS_AWAIT = 90
 
 NUMBER_WORDS_BUTTON = "Numbers to Words Converter"
-NUMBER_WORDS_CANCEL = "Cancel"
 
 
 # ============================================================
@@ -102,7 +101,8 @@ CUSTOM_MSG_LABELS = {
     # Scheduled admin notification
     "auto_clear":       "🧹 Auto Clear — daily admin notification",
     # Numbers to words converter
-    "number_words_prompt": "🔢 Numbers to Words Converter prompt",
+    "number_words_prompt": "🔢 Number converter link message",
+    "number_words_link":   "🔗 Number converter link / username",
 }
 
 DEFAULT_MSGS: dict = {
@@ -157,9 +157,8 @@ DEFAULT_MSGS: dict = {
     ),
     # Numbers to words converter
     "number_words_prompt": (
-        "Numbers to Words Converter လုပ်လိုသည့်နံပါတ် ပေးပို့ပါ။\n\n"
-        "Example:  1048    →   one thousand forty-eight\n\n"
-        "မဆက်လုပ်လိုပါက Cancel ကိုနှိပ်ပါ။"
+        "ဤ Bot ကိုအသုံးပြု၍ Number to Words Converter လုပ်ဆောင်နိုင်ပါသည်။\n\n"
+        "အောက်ပါ button ကိုနှိပ်၍ အသုံးပြုပါ။"
     ),
 }
 
@@ -684,6 +683,22 @@ async def setmsg_select(update: Update, context: CallbackContext) -> int:
         )
         return PLUS_REACTION_AWAIT
 
+    if key == "number_words_link":
+        current_link = context.application.bot_data.get(
+            "number_words_link", "(မသတ်မှတ်ရသေးပါ)"
+        )
+        await query.edit_message_text(
+            f"🔗 <b>{label}</b>\n\n"
+            f"လက်ရှိ link: <code>{html_escape(str(current_link))}</code>\n\n"
+            "အသုံးပြုလိုသော converter link သို့မဟုတ် Telegram username ကို ပို့ပါ။\n"
+            "ဥပမာ: <code>https://t.me/number_to_words_bot</code>\n"
+            "သို့မဟုတ် <code>@number_to_words_bot</code>\n\n"
+            "<i>/reset — link ဖျက်ပြီး မသတ်မှတ်ထားသောအခြေအနေသို့ ပြန်ထား</i>\n"
+            "<i>/cancel — မပြောင်းဘဲ ထွက်မည်</i>",
+            parse_mode="HTML",
+        )
+        return SETMSG_AWAIT
+
     stored = _get_custom_msgs(context.application.bot_data).get(key, {})
     if key == "form":
         current, current_entities = _get_form_message_payload(
@@ -769,7 +784,10 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
 
     if text.strip() == "/reset":
         custom = _get_custom_msgs(context.application.bot_data)
-        custom.pop(key, None)
+        if key == "number_words_link":
+            context.application.bot_data.pop("number_words_link", None)
+        else:
+            custom.pop(key, None)
         if context.application.persistence:
             await context.application.persistence.flush()
         save_bot_config_to_mongo(context.application.bot_data)
@@ -777,6 +795,35 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
         await msg.reply_text(
             f"✅ <b>{label}</b> — default သို့ ပြန်သတ်မှတ်ပြီးပါပြီ။",
             parse_mode="HTML"
+        )
+        return ConversationHandler.END
+
+    if key == "number_words_link":
+        raw_link = text.strip()
+        if re.fullmatch(r"@[A-Za-z0-9_]{5,32}", raw_link):
+            link = f"https://t.me/{raw_link[1:]}"
+        elif re.fullmatch(r"[A-Za-z0-9_]{5,32}", raw_link):
+            link = f"https://t.me/{raw_link}"
+        elif re.fullmatch(r"https?://\S+", raw_link):
+            link = raw_link
+        elif re.fullmatch(r"t\.me/\S+", raw_link):
+            link = f"https://{raw_link}"
+        else:
+            await msg.reply_text(
+                "❌ Link သို့မဟုတ် Telegram username ပုံစံမမှန်ပါ။\n"
+                "ဥပမာ: https://t.me/number_to_words_bot သို့မဟုတ် "
+                "@number_to_words_bot"
+            )
+            return SETMSG_AWAIT
+
+        context.application.bot_data["number_words_link"] = link
+        if context.application.persistence:
+            await context.application.persistence.flush()
+        save_bot_config_to_mongo(context.application.bot_data)
+        await msg.reply_text(
+            f"✅ <b>{CUSTOM_MSG_LABELS[key]}</b> — သိမ်းဆည်းပြီးပါပြီ။\n"
+            f"<code>{html_escape(link)}</code>",
+            parse_mode="HTML",
         )
         return ConversationHandler.END
 
@@ -1286,6 +1333,7 @@ def save_bot_config_to_mongo(bot_data: dict) -> None:
             "custom_msgs":  bot_data.get("custom_msgs", {}),
             "start_buttons": bot_data.get("start_buttons", []),
             "plus_reaction": _get_plus_reaction(bot_data),
+            "number_words_link": bot_data.get("number_words_link"),
         }
         db["bot_config"].replace_one({"_id": "bot_config"}, payload, upsert=True)
         logging.info("bot_config saved to MongoDB")
@@ -1310,6 +1358,9 @@ def load_bot_config_from_mongo(bot_data: dict) -> None:
             if "plus_reaction" in doc:
                 bot_data["plus_reaction"] = doc["plus_reaction"]
                 logging.info("bot_config: restored plus reaction from MongoDB")
+            if doc.get("number_words_link"):
+                bot_data["number_words_link"] = doc["number_words_link"]
+                logging.info("bot_config: restored number converter link from MongoDB")
         else:
             logging.info("bot_config: no saved config in MongoDB (first run)")
     except PyMongoError as e:
@@ -1683,109 +1734,24 @@ async def main_menu_command(
     await update.message.reply_text("Menu", reply_markup=reply_markup)
 
 
-_NUMBER_WORDS_ONES = (
-    "zero", "one", "two", "three", "four", "five", "six", "seven",
-    "eight", "nine", "ten", "eleven", "twelve", "thirteen", "fourteen",
-    "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
-)
-_NUMBER_WORDS_TENS = (
-    "", "", "twenty", "thirty", "forty", "fifty",
-    "sixty", "seventy", "eighty", "ninety",
-)
-_NUMBER_WORDS_SCALES = (
-    "", "thousand", "million", "billion", "trillion",
-    "quadrillion", "quintillion", "sextillion",
-)
-
-
-def _under_thousand_to_words(number: int) -> str:
-    if number < 20:
-        return _NUMBER_WORDS_ONES[number]
-    if number < 100:
-        tens, remainder = divmod(number, 10)
-        return _NUMBER_WORDS_TENS[tens] + (
-            f"-{_NUMBER_WORDS_ONES[remainder]}" if remainder else ""
-        )
-    hundreds, remainder = divmod(number, 100)
-    result = f"{_NUMBER_WORDS_ONES[hundreds]} hundred"
-    return f"{result} {_under_thousand_to_words(remainder)}" if remainder else result
-
-
-def _number_to_words(number: int) -> str | None:
-    """Convert an integer to English words without using an external package."""
-    if number == 0:
-        return "zero"
-
-    sign = "minus " if number < 0 else ""
-    remaining = abs(number)
-    groups = []
-    scale_index = 0
-
-    while remaining:
-        chunk = remaining % 1000
-        if chunk:
-            if scale_index >= len(_NUMBER_WORDS_SCALES):
-                return None
-            chunk_words = _under_thousand_to_words(chunk)
-            scale = _NUMBER_WORDS_SCALES[scale_index]
-            groups.append(f"{chunk_words} {scale}".strip())
-        remaining //= 1000
-        scale_index += 1
-
-    return sign + " ".join(reversed(groups))
-
-
-def _number_words_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        [[KeyboardButton(NUMBER_WORDS_CANCEL, style="danger")]],
-        resize_keyboard=True,
-        one_time_keyboard=False,
-    )
-
-
 async def number_words_start(update: Update, context: CallbackContext) -> int:
+    link = context.application.bot_data.get("number_words_link")
+    reply_markup = None
+    if link:
+        reply_markup = InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "🔢 Open Number to Words Converter",
+                url=link,
+                style="primary",
+            )
+        ]])
     await _reply_custom(
         update.message,
         context.application.bot_data,
         "number_words_prompt",
-        reply_markup=_number_words_keyboard(),
+        reply_markup=reply_markup,
     )
-    return NUMBER_WORDS_AWAIT
-
-
-async def number_words_receive(update: Update, context: CallbackContext) -> int:
-    raw = (update.message.text or "").strip()
-
-    if raw.casefold() in {
-        NUMBER_WORDS_CANCEL.casefold(),
-        f"/{NUMBER_WORDS_CANCEL}".casefold(),
-    }:
-        await main_menu_command(update, context)
-        return ConversationHandler.END
-
-    normalized = raw.replace(",", "").replace(" ", "")
-    if not re.fullmatch(r"[+-]?\d+", normalized):
-        await update.message.reply_text(
-            "❌ ကျေးဇူးပြု၍ integer number တစ်ခုသာ ပေးပို့ပါ။\n"
-            "ဥပမာ: 1048",
-            reply_markup=_number_words_keyboard(),
-        )
-        return NUMBER_WORDS_AWAIT
-
-    number = int(normalized)
-    words = _number_to_words(number)
-    if words is None:
-        await update.message.reply_text(
-            "❌ ဤနံပါတ်သည် လက်ရှိ converter အတွက် အလွန်ကြီးလွန်းပါသည်။",
-            reply_markup=_number_words_keyboard(),
-        )
-        return NUMBER_WORDS_AWAIT
-
-    await update.message.reply_text(
-        f"{number} → {words}",
-        reply_markup=_number_words_keyboard(),
-    )
-    return NUMBER_WORDS_AWAIT
+    return ConversationHandler.END
 
 
 async def main_menu_text_handler(update: Update, context: CallbackContext) -> None:
@@ -4030,27 +3996,12 @@ def main():
 
     application.add_handler(CommandHandler("menu", main_menu_command))
     application.add_handler(CommandHandler("hidemenu", remove_menu))
-    number_words_handler = ConversationHandler(
-        entry_points=[
-            MessageHandler(
-                filters.TEXT
-                & filters.Regex(r"^Numbers to Words Converter$")
-                & filters.ChatType.PRIVATE,
-                number_words_start,
-            ),
-        ],
-        states={
-            NUMBER_WORDS_AWAIT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, number_words_receive),
-            ],
-        },
-        fallbacks=[
-            CommandHandler("cancel", number_words_receive),
-        ],
-        allow_reentry=True,
-        per_message=False,
-    )
-    application.add_handler(number_words_handler)
+    application.add_handler(MessageHandler(
+        filters.TEXT
+        & filters.Regex(r"^Numbers to Words Converter$")
+        & filters.ChatType.PRIVATE,
+        number_words_start,
+    ))
     application.add_handler(MessageHandler(
         filters.TEXT & filters.Regex(
             r'^(Showdata|Total Plus|Clear Data|Reset Plus|Clear All|Reset Plus All|Hide Menu)$'
