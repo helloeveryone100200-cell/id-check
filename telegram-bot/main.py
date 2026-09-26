@@ -72,6 +72,8 @@ NUMBER_WORDS_BUTTON = "Numbers to Words Converter"
 CUSTOM_MSG_LABELS = {
     "welcome":          "🏠 Welcome / Start Message",
     "help":             "❓ Help Message",
+    "feedback_prompt":  "✉️ /feedback — Prompt message",
+    "feedback_sent":    "✅ /feedback — Sent confirmation",
     "form":             "📋 /form — Full report template",
     "cleardata_ok":     "✅ /cleardata — Data deleted message",
     "cleardata_empty":  "📭 /cleardata — No data message",
@@ -121,6 +123,11 @@ DEFAULT_MSGS: dict = {
         " /guide - Usage guide\n"
         "🧮 Math: Bot PM တွင် expression ရိုက်ပါ (e.g. 2+2)"
     ),
+    "feedback_prompt": (
+        "Admin ထံ စာပေးပို့နိုင်ပါသည်။\n\n"
+        "(ရပ်လိုပါက /cancel)"
+    ),
+    "feedback_sent":    "သင်၏ မှတ်ချက်ကို Admin ထံ ပေးပို့ပြီးပါပြီ။",
     "form":              "📋 Deposit Report Form Template\n\nကော်ပီကူးယူ၍ ဖြည့်စွက်ပြီး ပို့ပေးပါ:\n\n",
     "cleardata_ok":      "✅ Data deleted for today ({today}).\n✅ Plus counter reset ပြုလုပ်ပြီးပါပြီ။",
     "cleardata_empty":   "No data found for today ({today}).",
@@ -2342,8 +2349,10 @@ async def extract_and_save_data(update: Update, context: CallbackContext) -> Non
 # ============================================================
 
 async def start_feedback(update: Update, context: CallbackContext) -> int:
-    await update.message.reply_text(
-        "Admin ထံ စာပေးပို့နိုင်ပါသည်။\n\n(ရပ်လိုပါက /cancel)"
+    await _reply_custom(
+        update.message,
+        context.application.bot_data,
+        "feedback_prompt",
     )
     return FEEDBACK_AWAITING
 
@@ -2362,7 +2371,11 @@ async def process_feedback(update: Update, context: CallbackContext) -> int:
         except Exception:
             pass
 
-    await update.message.reply_text("သင်၏ မှတ်ချက်ကို Admin ထံ ပေးပို့ပြီးပါပြီ။")
+    await _reply_custom(
+        update.message,
+        context.application.bot_data,
+        "feedback_sent",
+    )
     return ConversationHandler.END
 
 
