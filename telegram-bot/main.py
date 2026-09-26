@@ -72,6 +72,7 @@ NUMBER_WORDS_BUTTON = "Numbers to Words Converter"
 CUSTOM_MSG_LABELS = {
     "welcome":          "🏠 Welcome / Start Message",
     "help":             "❓ Help Message",
+    "cancelled":        "❌ /cancel — Cancelled message",
     "feedback_prompt":  "✉️ /feedback — Prompt message",
     "feedback_sent":    "✅ /feedback — Sent confirmation",
     "form":             "📋 /form — Full report template",
@@ -123,6 +124,7 @@ DEFAULT_MSGS: dict = {
         " /guide - Usage guide\n"
         "🧮 Math: Bot PM တွင် expression ရိုက်ပါ (e.g. 2+2)"
     ),
+    "cancelled":        "❌ Action cancelled.",
     "feedback_prompt": (
         "Admin ထံ စာပေးပို့နိုင်ပါသည်။\n\n"
         "(ရပ်လိုပါက /cancel)"
@@ -2380,7 +2382,11 @@ async def process_feedback(update: Update, context: CallbackContext) -> int:
 
 
 async def cancel_conversation(update: Update, context: CallbackContext) -> int:
-    await update.message.reply_text('❌ Action cancelled.')
+    await _reply_custom(
+        update.message,
+        context.application.bot_data,
+        "cancelled",
+    )
     return ConversationHandler.END
 
 
