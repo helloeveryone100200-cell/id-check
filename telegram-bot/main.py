@@ -1735,19 +1735,30 @@ async def main_menu_command(
 
 
 async def number_words_start(update: Update, context: CallbackContext) -> int:
-    link = context.application.bot_data.get("number_words_link")
+    bot_data = context.application.bot_data
+    link = bot_data.get("number_words_link")
     reply_markup = None
     if link:
+        button_label = "🔢 Open Number to Words Converter"
+        button_kwargs = {
+            "url": link,
+            "style": "primary",
+        }
+        custom_emoji_id = _get_first_custom_emoji_id(
+            bot_data, "number_words_prompt"
+        )
+        if custom_emoji_id:
+            button_label = "Open Number to Words Converter"
+            button_kwargs["icon_custom_emoji_id"] = custom_emoji_id
         reply_markup = InlineKeyboardMarkup([[
             InlineKeyboardButton(
-                "🔢 Open Number to Words Converter",
-                url=link,
-                style="primary",
+                button_label,
+                **button_kwargs,
             )
         ]])
     await _reply_custom(
         update.message,
-        context.application.bot_data,
+        bot_data,
         "number_words_prompt",
         reply_markup=reply_markup,
     )
