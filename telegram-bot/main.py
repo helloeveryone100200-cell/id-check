@@ -25,7 +25,7 @@ from telegram.ext import (
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
     KeyboardButton, ReplyKeyboardMarkup,
-    InputFile, BotCommand, MessageEntity,
+    InputFile, BotCommand, BotCommandScopeChat, MessageEntity,
     ReactionTypeEmoji, ReactionTypeCustomEmoji
 )
 from telegram.ext import CallbackContext
@@ -3918,7 +3918,7 @@ async def post_init(application: Application) -> None:
         time=time(hour=12, minute=0, second=0, tzinfo=tz),
         name='auto_clear_daily'
     )
-    await application.bot.set_my_commands([
+    public_commands = [
         BotCommand("start",          "Bot စတင် / Menu ဖွင့်"),
         BotCommand("menu",           "Main menu"),
         BotCommand("showdata",       "ယနေ့ data ကြည့်"),
@@ -3927,6 +3927,8 @@ async def post_init(application: Application) -> None:
         BotCommand("total_plus",     "Plus counter ကြည့်"),
         BotCommand("reset_plus",     "Plus counter ရှင်း"),
         BotCommand("feedback",       "Admin ထံ မှတ်ချက်"),
+    ]
+    admin_commands = public_commands + [
         BotCommand("stats",          "Bot stats (Admin)"),
         BotCommand("listusers",      "User list (Admin)"),
         BotCommand("listgroups",     "Group list (Admin)"),
@@ -3934,7 +3936,21 @@ async def post_init(application: Application) -> None:
         BotCommand("admin",          "Admin panel (Admin)"),
         BotCommand("clearall",       "Data အားလုံး ရှင်း (Admin PM)"),
         BotCommand("resetplusall",   "Plus counter အားလုံး reset (Admin PM)"),
-    ])
+    ]
+
+    # Regular users see only the public commands. Each configured admin gets
+    # the same list plus the admin-only commands in their private menu.
+    await application.bot.set_my_commands(public_commands)
+    for admin_id in ADMIN_IDS:
+        try:
+            await application.bot.set_my_commands(
+                admin_commands,
+                scope=BotCommandScopeChat(chat_id=admin_id),
+            )
+        except Exception as exc:
+            logging.warning(
+                "Could not set admin command menu for %s: %s", admin_id, exc
+            )
 
 
 # ============================================================
