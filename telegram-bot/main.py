@@ -3921,15 +3921,12 @@ async def post_init(application: Application) -> None:
     await application.bot.set_my_commands([
         BotCommand("start",          "Bot စတင် / Menu ဖွင့်"),
         BotCommand("menu",           "Main menu"),
-        BotCommand("guide",          "Bot လမ်းညွှန်"),
         BotCommand("showdata",       "ယနေ့ data ကြည့်"),
         BotCommand("cleardata",      "ယနေ့ data ဖျက်"),
         BotCommand("form",           "Report template"),
         BotCommand("total_plus",     "Plus counter ကြည့်"),
         BotCommand("reset_plus",     "Plus counter ရှင်း"),
-        BotCommand("setplusreaction", "Plus reaction သတ်မှတ် (Admin)"),
         BotCommand("feedback",       "Admin ထံ မှတ်ချက်"),
-        BotCommand("help",           "Help"),
         BotCommand("stats",          "Bot stats (Admin)"),
         BotCommand("listusers",      "User list (Admin)"),
         BotCommand("listgroups",     "Group list (Admin)"),
@@ -3937,8 +3934,6 @@ async def post_init(application: Application) -> None:
         BotCommand("admin",          "Admin panel (Admin)"),
         BotCommand("clearall",       "Data အားလုံး ရှင်း (Admin PM)"),
         BotCommand("resetplusall",   "Plus counter အားလုံး reset (Admin PM)"),
-        BotCommand("deposit_total",  "Deposit report total"),
-        BotCommand("whatsapp_total", "WhatsApp report total"),
     ])
 
 
