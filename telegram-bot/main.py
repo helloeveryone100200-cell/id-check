@@ -1688,8 +1688,8 @@ def _main_reply_keyboard() -> ReplyKeyboardMarkup:
                 KeyboardButton("Total Plus", style="primary"),
             ],
             [
-                KeyboardButton("Clear Data", style="primary"),
-                KeyboardButton("Reset Plus", style="primary"),
+                KeyboardButton("Clear Data", style="danger"),
+                KeyboardButton("Reset Plus", style="danger"),
             ],
             [
                 KeyboardButton("Clear All", style="success"),
