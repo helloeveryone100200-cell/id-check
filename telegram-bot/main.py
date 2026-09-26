@@ -1703,11 +1703,9 @@ def _main_reply_keyboard() -> ReplyKeyboardMarkup:
 
 
 async def ensure_reply_keyboard(update: Update, context: CallbackContext) -> None:
-    """Show the persistent keyboard when a private chat first becomes active."""
+    """Show the persistent keyboard when a chat first becomes active."""
     message = update.message
     if not message or not update.effective_chat:
-        return
-    if update.effective_chat.type != "private":
         return
 
     text = (message.text or "").strip()
@@ -4015,7 +4013,7 @@ def main():
     )
 
     application.add_handler(MessageHandler(
-        filters.ALL & filters.ChatType.PRIVATE,
+        filters.ALL,
         ensure_reply_keyboard,
     ), group=-1)
     application.add_handler(CommandHandler("menu", main_menu_command))
