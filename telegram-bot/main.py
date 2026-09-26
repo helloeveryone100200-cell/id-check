@@ -24,7 +24,7 @@ from telegram.ext import (
 )
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
-    KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove,
+    KeyboardButton, ReplyKeyboardMarkup,
     InputFile, BotCommand, MessageEntity,
     ReactionTypeEmoji, ReactionTypeCustomEmoji
 )
@@ -72,7 +72,6 @@ NUMBER_WORDS_BUTTON = "Numbers to Words Converter"
 CUSTOM_MSG_LABELS = {
     "welcome":          "🏠 Welcome / Start Message",
     "help":             "❓ Help Message",
-    "hidemenu":         "🙈 Hide Menu Message",
     "form":             "📋 /form — Full report template",
     "cleardata_ok":     "✅ /cleardata — Data deleted message",
     "cleardata_empty":  "📭 /cleardata — No data message",
@@ -120,10 +119,8 @@ DEFAULT_MSGS: dict = {
         " /reset_plus - Reset plus counter\n"
         " /feedback - Send feedback to admin\n"
         " /guide - Usage guide\n"
-        " /hidemenu - Hide menu\n\n"
         "🧮 Math: Bot PM တွင် expression ရိုက်ပါ (e.g. 2+2)"
     ),
-    "hidemenu":          "Menu keyboard ကို ဖျက်လိုက်ပါပြီ။ /start ဖြင့် ပြန်ခေါ်နိုင်ပါသည်။😒",
     "form":              "📋 Deposit Report Form Template\n\nကော်ပီကူးယူ၍ ဖြည့်စွက်ပြီး ပို့ပေးပါ:\n\n",
     "cleardata_ok":      "✅ Data deleted for today ({today}).\n✅ Plus counter reset ပြုလုပ်ပြီးပါပြီ။",
     "cleardata_empty":   "No data found for today ({today}).",
@@ -1701,7 +1698,6 @@ async def main_menu_command(
             KeyboardButton("Reset Plus All", style="success"),
         ],
         [KeyboardButton(NUMBER_WORDS_BUTTON, style="primary")],
-        [KeyboardButton("Hide Menu", style="danger")],
     ]
     reply_markup = ReplyKeyboardMarkup(
         keyboard, resize_keyboard=True, one_time_keyboard=False
@@ -1774,19 +1770,10 @@ async def main_menu_text_handler(update: Update, context: CallbackContext) -> No
         "Reset Plus": reset_plus_command,
         "Clear All": admin_clearall_command,
         "Reset Plus All": admin_resetplusall_command,
-        "Hide Menu": remove_menu,
     }
     handler = handlers.get((update.message.text or "").strip())
     if handler:
         await handler(update, context)
-
-
-async def remove_menu(update: Update, context: CallbackContext) -> None:
-    await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
-    await _reply_custom(
-        update.message, context.application.bot_data, "hidemenu",
-        reply_markup=ReplyKeyboardRemove()
-    )
 
 
 # ============================================================
@@ -3781,9 +3768,8 @@ GUIDE_PAGES = [
             "/feedback ကိုနှိပ်ပြီး\n"
             "Admin ထံ မှတ်ချက်/အကြံပြုချက် ပေးပို့နိုင်သည်။\n\n"
             "<b>📱 Menu စီမံခန့်ခွဲမှု</b>\n"
-            "<b>/menu</b> — Main menu ဖွင့်\n"
-            "<b>/start</b> — Bot စတင် / menu ပြ\n"
-            "<b>/hidemenu</b> — Keyboard ဖျောက်\n\n"
+             "<b>/menu</b> — Main menu ပြ\n"
+             "<b>/start</b> — Bot စတင်ပြီး menu ပြ\n\n"
             "<b>🔎 Command အားလုံး:</b>\n"
             "<b>/help</b> ကိုနှိပ်ပြီး command list အပြည့်ကြည့်နိုင်သည်။"
         ),
@@ -3921,7 +3907,6 @@ async def post_init(application: Application) -> None:
         BotCommand("reset_plus",     "Plus counter ရှင်း"),
         BotCommand("setplusreaction", "Plus reaction သတ်မှတ် (Admin)"),
         BotCommand("feedback",       "Admin ထံ မှတ်ချက်"),
-        BotCommand("hidemenu",       "Keyboard ဖျောက်"),
         BotCommand("help",           "Help"),
         BotCommand("stats",          "Bot stats (Admin)"),
         BotCommand("listusers",      "User list (Admin)"),
@@ -4006,7 +3991,6 @@ def main():
     )
 
     application.add_handler(CommandHandler("menu", main_menu_command))
-    application.add_handler(CommandHandler("hidemenu", remove_menu))
     application.add_handler(MessageHandler(
         filters.TEXT
         & filters.Regex(r"^Numbers to Words Converter$")
@@ -4015,7 +3999,7 @@ def main():
     ))
     application.add_handler(MessageHandler(
         filters.TEXT & filters.Regex(
-            r'^(Showdata|Total Plus|Clear Data|Reset Plus|Clear All|Reset Plus All|Hide Menu)$'
+            r'^(Showdata|Total Plus|Clear Data|Reset Plus|Clear All|Reset Plus All)$'
         ),
         main_menu_text_handler,
     ))
