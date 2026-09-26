@@ -1679,29 +1679,53 @@ async def report_form_command(update: Update, context: CallbackContext) -> None:
     )
 
 
+def _main_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Build the persistent user-facing reply keyboard."""
+    return ReplyKeyboardMarkup(
+        [
+            [
+                KeyboardButton("Showdata", style="primary"),
+                KeyboardButton("Total Plus", style="primary"),
+            ],
+            [
+                KeyboardButton("Clear Data", style="primary"),
+                KeyboardButton("Reset Plus", style="primary"),
+            ],
+            [
+                KeyboardButton("Clear All", style="success"),
+                KeyboardButton("Reset Plus All", style="success"),
+            ],
+            [KeyboardButton(NUMBER_WORDS_BUTTON, style="primary")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
+
+
+async def ensure_reply_keyboard(update: Update, context: CallbackContext) -> None:
+    """Show the persistent keyboard when a private chat first becomes active."""
+    message = update.message
+    if not message or not update.effective_chat:
+        return
+    if update.effective_chat.type != "private":
+        return
+
+    text = (message.text or "").strip()
+    if re.match(r"^/(?:start|menu)(?:@\w+)?(?:\s|$)", text, re.IGNORECASE):
+        return
+    if context.chat_data.get("reply_keyboard_sent"):
+        return
+
+    context.chat_data["reply_keyboard_sent"] = True
+    await message.reply_text("Menu", reply_markup=_main_reply_keyboard())
+
+
 async def main_menu_command(
     update: Update, context: CallbackContext, show_welcome: bool = False
 ) -> None:
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
-
-    keyboard = [
-        [
-            KeyboardButton("Showdata", style="primary"),
-            KeyboardButton("Total Plus", style="primary"),
-        ],
-        [
-            KeyboardButton("Clear Data", style="primary"),
-            KeyboardButton("Reset Plus", style="primary"),
-        ],
-        [
-            KeyboardButton("Clear All", style="success"),
-            KeyboardButton("Reset Plus All", style="success"),
-        ],
-        [KeyboardButton(NUMBER_WORDS_BUTTON, style="primary")],
-    ]
-    reply_markup = ReplyKeyboardMarkup(
-        keyboard, resize_keyboard=True, one_time_keyboard=False
-    )
+    context.chat_data["reply_keyboard_sent"] = True
+    reply_markup = _main_reply_keyboard()
     if show_welcome:
         user_name = update.effective_user.full_name if update.effective_user else "User"
         bot_username = context.bot.username
@@ -3990,6 +4014,10 @@ def main():
         .build()
     )
 
+    application.add_handler(MessageHandler(
+        filters.ALL & filters.ChatType.PRIVATE,
+        ensure_reply_keyboard,
+    ), group=-1)
     application.add_handler(CommandHandler("menu", main_menu_command))
     application.add_handler(MessageHandler(
         filters.TEXT
