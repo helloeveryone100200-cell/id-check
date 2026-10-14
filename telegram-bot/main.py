@@ -738,11 +738,11 @@ async def setmsg_select(update: Update, context: CallbackContext) -> int:
 
     if key in {"confirm_button", "cancel_button"}:
         await query.edit_message_text(
-            f"🔘 <b>{label}</b>\\n\\n"
-            f"<b>လက်ရှိ button text:</b>\\n"
-            f"<blockquote>{html_escape(current[:800])}</blockquote>\\n\\n"
-            "✏️ Button text အသစ်ကို တစ်ကြောင်းတည်း ပို့ပါ (1–64 characters)။\\n\\n"
-            "<i>/reset — default ပြန်ထား</i>\\n"
+            f"🔘 <b>{label}</b>\n\n"
+            f"<b>လက်ရှိ button text:</b>\n"
+            f"<blockquote>{html_escape(current[:800])}</blockquote>\n\n"
+            "✏️ Button text အသစ်ကို တစ်ကြောင်းတည်း ပို့ပါ (1–64 characters)။\n\n"
+            "<i>/reset — default ပြန်ထား</i>\n"
             "<i>/cancel — မပြောင်းဘဲ ထွက်မည်</i>",
             parse_mode="HTML",
         )
@@ -826,8 +826,8 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
         if (
             not text.strip()
             or len(text) > 64
-            or "\\n" in text
-            or "\\r" in text
+            or "\n" in text
+            or "\r" in text
         ):
             await msg.reply_text(
                 "❌ Button text သည် တစ်ကြောင်းတည်းဖြစ်ရမည်၊ 1–64 characters အတွင်း ရှိရမည်။"
@@ -3745,6 +3745,7 @@ async def reset_plus_command(update: Update, context: CallbackContext) -> None:
         message,
         bot_data,
         "reset_plus_confirm",
+        parse_mode="HTML",
         reply_markup=keyboard,
         count=len(keys_to_del),
     )
