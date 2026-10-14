@@ -124,6 +124,9 @@ CUSTOM_MSG_LABELS = {
     "schedule_menu_restored": "Schedule reply keyboard restored message",
     "schedule_lists_prompt": "⏰ Current group schedule list header",
     "schedule_list_text_item": "Schedule list row ({i}, {id}, {type}, {time}, {group_count}, {message})",
+    "schedule_set_command_description": "Command menu description for setting a group schedule",
+    "schedule_remove_command_description": "Command menu description for removing a group schedule",
+    "schedule_list_command_description": "Command menu description for listing this group's schedules",
     "plus_reaction":    "⚙️ Plus counter reaction",
     "plus_fmt":         "➕ Plus count format  ({count} သုံးပါ)",
     "digit_emoji":      "🔢 Animated number emoji (0→9 အစဉ်လိုက်)",
@@ -220,6 +223,9 @@ DEFAULT_MSGS: dict = {
     "schedule_menu_restored": "📋 Schedule menu ပြန်လည်အသင့်ဖြစ်ပါပြီ။",
     "schedule_lists_prompt": "⏰ ဤ Group ၏ Active Schedules:\n\n",
     "schedule_list_text_item": "{i}. {id} | {type} | {time} | {group_count} group(s)\n   💬 {message}\n\n",
+    "schedule_set_command_description": "Set a schedule for this group",
+    "schedule_remove_command_description": "Remove a schedule from this group",
+    "schedule_list_command_description": "List schedules for this group",
     "plus_fmt":          "+{count}",
     "digit_emoji":       "",   # empty = use plain digits
     # Plus / minus reply messages
@@ -1514,6 +1520,7 @@ def save_bot_config_to_mongo(bot_data: dict) -> None:
         payload = {
             "_id":          "bot_config",
             "custom_msgs":  bot_data.get("custom_msgs", {}),
+            "schedule_button_aliases": bot_data.get("schedule_button_aliases", {}),
             "start_buttons": bot_data.get("start_buttons", []),
             "plus_reaction": _get_plus_reaction(bot_data),
             "number_words_link": bot_data.get("number_words_link"),
@@ -1535,6 +1542,8 @@ def load_bot_config_from_mongo(bot_data: dict) -> None:
             if "custom_msgs" in doc:
                 bot_data["custom_msgs"] = doc["custom_msgs"]
                 logging.info(f"bot_config: restored {len(doc['custom_msgs'])} custom_msgs from MongoDB")
+            if "schedule_button_aliases" in doc:
+                bot_data["schedule_button_aliases"] = doc["schedule_button_aliases"]
             if "start_buttons" in doc:
                 bot_data["start_buttons"] = doc["start_buttons"]
                 logging.info(f"bot_config: restored {len(doc['start_buttons'])} start_buttons from MongoDB")
@@ -4466,9 +4475,9 @@ async def post_init(application: Application) -> None:
         BotCommand("feedback",       "Admin ထံ မှတ်ချက်"),
     ]
     group_commands = public_commands + [
-        BotCommand("setschedule",   "Set a schedule for this group"),
-        BotCommand("removeschedule", "Remove a schedule from this group"),
-        BotCommand("listschedules", "List schedules for this group"),
+        BotCommand("setschedule",   get_msg(application.bot_data, "schedule_set_command_description")),
+        BotCommand("removeschedule", get_msg(application.bot_data, "schedule_remove_command_description")),
+        BotCommand("listschedules", get_msg(application.bot_data, "schedule_list_command_description")),
     ]
     admin_commands = public_commands + [
         BotCommand("stats",          "Bot stats (Admin)"),
