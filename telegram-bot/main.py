@@ -497,15 +497,35 @@ def get_msg(bot_data: dict, key: str, **fmt) -> str:
 
 def _confirmation_button(bot_data: dict, key: str, callback_data: str,
                          style: str) -> InlineKeyboardButton:
-    """Build a customisable confirmation button with optional custom emoji icon."""
+    """Build a customisable confirmation button with an optional animated icon.
+
+    Telegram buttons accept one custom emoji icon, not message entities. Move
+    the first custom emoji from the configured button text into the icon field
+    so its visible glyph is not duplicated in the label.
+    """
     label = get_msg(bot_data, key)
     kwargs = {"callback_data": callback_data, "style": style}
-    custom_emoji_id = _get_first_custom_emoji_id(bot_data, key)
+    stored = _get_custom_msgs(bot_data).get(key, {})
+    custom_emoji_entity, custom_emoji_id = _first_custom_emoji_entity(
+        stored.get("entities") or []
+    )
     if custom_emoji_id:
         kwargs["icon_custom_emoji_id"] = custom_emoji_id
+        if custom_emoji_entity:
+            label = _remove_entity_from_text(label, custom_emoji_entity).strip()
+
+        # Keep the default symbols out of the text when the icon is rendered
+        # separately by Telegram. Custom text without these prefixes is intact.
         prefix = {"confirm_button": "✅ ", "cancel_button": "❌ "}.get(key, "")
         if prefix and label.startswith(prefix):
-            label = label[len(prefix):]
+            label = label[len(prefix):].lstrip()
+
+        # Telegram requires non-empty button text, even if the chosen custom
+        # emoji was the entire configured label.
+        if not label:
+            label = {"confirm_button": "Confirm", "cancel_button": "Cancel"}.get(
+                key, "Continue"
+            )
     return InlineKeyboardButton(label, **kwargs)
 
 
