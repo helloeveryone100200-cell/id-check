@@ -91,6 +91,40 @@ CUSTOM_MSG_LABELS = {
     "confirm_button":   "✅ Confirmation — Confirm button text",
     "cancel_button":    "❌ Confirmation — Cancel button text",
     "owner_only_action_denied": "🔒 Owner-only actions — Access denied message",
+    # Group-specific schedule system
+    "schedule_set_button": "⏰ Set Schedule — Group reply-keyboard button",
+    "schedule_remove_button": "🗑️ Remove Schedule — Group reply-keyboard button",
+    "schedule_group_only": "🔒 Schedule unavailable in private chat",
+    "schedule_admin_only": "🔒 Schedule permission denied — Group Owner/Admin only",
+    "schedule_time_prompt": "⏰ Schedule time prompt (HH:MM)",
+    "schedule_invalid_time": "❌ Invalid schedule time format",
+    "schedule_invalid_time_value": "❌ Invalid schedule time value",
+    "schedule_message_prompt": "💬 Schedule message prompt ({time})",
+    "schedule_type_prompt": "📌 Schedule type prompt ({time})",
+    "schedule_once_button": "1️⃣ One-time schedule type button",
+    "schedule_daily_button": "🔁 Daily schedule type button",
+    "schedule_cancel_button": "❌ Schedule setup cancel button",
+    "schedule_cancelled": "❌ Schedule setup cancelled message",
+    "schedule_missing_data": "❌ Schedule setup incomplete message",
+    "schedule_save_failed": "❌ Schedule database save failure message",
+    "schedule_create_failed": "❌ Schedule creation failure message",
+    "schedule_saved": "✅ Schedule created confirmation ({fire_label}, {message}, {group_name}, {schedule_id})",
+    "schedule_type_once_label": "One-time schedule type name",
+    "schedule_type_daily_label": "Daily schedule type name",
+    "schedule_remove_prompt": "🗑️ Select schedule to remove prompt",
+    "schedule_remove_none": "📭 No schedules in this group message",
+    "schedule_remove_cancel_button": "↩️ Cancel schedule selection button",
+    "schedule_remove_cancelled": "❌ Schedule removal cancelled message",
+    "schedule_list_item": "Schedule picker button template ({time}, {type}, {id})",
+    "schedule_remove_confirm": "⚠️ Schedule deletion prompt ({time}, {type}, {message}, {id})",
+    "schedule_delete_button": "🗑️ Delete schedule — danger button",
+    "schedule_delete_cancel_button": "❌ Cancel schedule deletion button",
+    "schedule_delete_success": "✅ Schedule removed confirmation ({id}, {time})",
+    "schedule_delete_failed": "❌ Schedule database deletion failure message",
+    "schedule_not_found": "❌ Schedule not found in this group",
+    "schedule_menu_restored": "Schedule reply keyboard restored message",
+    "schedule_lists_prompt": "⏰ Current group schedule list header",
+    "schedule_list_text_item": "Schedule list row ({i}, {id}, {type}, {time}, {group_count}, {message})",
     "plus_reaction":    "⚙️ Plus counter reaction",
     "plus_fmt":         "➕ Plus count format  ({count} သုံးပါ)",
     "digit_emoji":      "🔢 Animated number emoji (0→9 အစဉ်လိုက်)",
@@ -153,6 +187,40 @@ DEFAULT_MSGS: dict = {
     "confirm_button":   "✅ Confirm",
     "cancel_button":    "❌ Cancel",
     "owner_only_action_denied": "❌ ဤလုပ်ဆောင်ချက်ကို Bot Owner သာ အသုံးပြုနိုင်ပါသည်။",
+    # Group-specific schedule system. All user-facing text is configurable in /setmsg.
+    "schedule_set_button": "⏰ Set Schedule",
+    "schedule_remove_button": "🗑️ Remove Schedule",
+    "schedule_group_only": "❌ Schedule စနစ်ကို Group ထဲတွင်သာ အသုံးပြုနိုင်ပါသည်။",
+    "schedule_admin_only": "❌ ဤလုပ်ဆောင်ချက်ကို Group Owner or Admins သာ အသုံးပြုနိုင်ပါသည်။",
+    "schedule_time_prompt": "⏰ Schedule time ကို HH:MM ပုံစံဖြင့် ရိုက်ပါ (Yangon time):\nဥပမာ: 09:30\n\n(/cancel ဖြင့် ရပ်)",
+    "schedule_invalid_time": "❌ HH:MM ပုံစံ မမှန်ပါ (ဥပမာ: 09:30)",
+    "schedule_invalid_time_value": "❌ အချိန်မမှန်ပါ။",
+    "schedule_message_prompt": "✅ {time} (Yangon)\n\nMessage ကို ရိုက်ထည့်ပါ:",
+    "schedule_type_prompt": "📌 Schedule type ရွေးပါ ({time}):",
+    "schedule_once_button": "1️⃣ One-time",
+    "schedule_daily_button": "🔁 Every Day",
+    "schedule_cancel_button": "❌ Cancel",
+    "schedule_cancelled": "❌ Schedule လုပ်ဆောင်ချက်ကို ဖျက်သိမ်းလိုက်ပါသည်။",
+    "schedule_missing_data": "❌ Schedule အချက်အလက် မပြည့်စုံပါ။",
+    "schedule_save_failed": "❌ MongoDB တွင် schedule သိမ်းဆည်း၍ မရပါ။ ခဏအကြာတွင် ထပ်စမ်းပါ။",
+    "schedule_create_failed": "❌ Schedule ကို စတင်သတ်မှတ်၍ မရပါ။ ခဏအကြာတွင် ထပ်စမ်းပါ။",
+    "schedule_saved": "✅ Schedule ထည့်ပြီးပါပြီ!\n\n⏰ {fire_label}\n💬 {message}\n👥 {group_name}\n🆔 {schedule_id}",
+    "schedule_type_once_label": "One-time",
+    "schedule_type_daily_label": "Daily",
+    "schedule_remove_prompt": "🗑️ ဤ Group အတွက် ဖျက်လိုသော Schedule ကို ရွေးပါ။",
+    "schedule_remove_none": "⏰ ဤ Group တွင် ဖျက်ရန် Schedule မရှိသေးပါ။",
+    "schedule_remove_cancel_button": "↩️ Cancel",
+    "schedule_remove_cancelled": "❌ Schedule ဖျက်ခြင်းကို ဖျက်သိမ်းလိုက်ပါသည်။",
+    "schedule_list_item": "⏰ {time} • {type} • {id}",
+    "schedule_remove_confirm": "⚠️ ဤ Schedule ကို ဤ Group မှ ဖယ်ရှားမည်။\n\n⏰ {time}\n🔁 {type}\n💬 {message}\n🆔 {id}\n\nဆက်လုပ်မည်လား?",
+    "schedule_delete_button": "🗑️ Delete",
+    "schedule_delete_cancel_button": "❌ Cancel",
+    "schedule_delete_success": "✅ Schedule {id} ({time}) ကို ဤ Group မှ ဖယ်ရှားပြီးပါပြီ။",
+    "schedule_delete_failed": "❌ Database မှ Schedule ကို မဖျက်နိုင်ပါ။ ခဏအကြာတွင် ထပ်စမ်းပါ။",
+    "schedule_not_found": "❌ ဤ Group တွင် ထို Schedule ကို မတွေ့ပါ။",
+    "schedule_menu_restored": "📋 Schedule menu ပြန်လည်အသင့်ဖြစ်ပါပြီ။",
+    "schedule_lists_prompt": "⏰ ဤ Group ၏ Active Schedules:\n\n",
+    "schedule_list_text_item": "{i}. {id} | {type} | {time} | {group_count} group(s)\n   💬 {message}\n\n",
     "plus_fmt":          "+{count}",
     "digit_emoji":       "",   # empty = use plain digits
     # Plus / minus reply messages
@@ -302,6 +370,40 @@ async def _remove_plus_message_reaction(bot, chat_id: int, message_id: int) -> N
 
 def _get_custom_msgs(bot_data: dict) -> dict:
     return bot_data.setdefault("custom_msgs", {})
+
+
+def _normalize_schedule_keyboard_text(text: str, limit: int = 64) -> str:
+    """Return a Telegram-safe single-line keyboard label."""
+    normalized = " ".join(str(text or "").split()).strip()
+    return normalized[:limit]
+
+
+def _schedule_keyboard_label(bot_data: dict, key: str) -> str:
+    """Get a bounded custom schedule keyboard label."""
+    label = _normalize_schedule_keyboard_text(get_msg(bot_data, key))
+    return label or _normalize_schedule_keyboard_text(DEFAULT_MSGS.get(key, key))
+
+
+def _schedule_keyboard_labels(bot_data: dict, key: str) -> set[str]:
+    """Current and recently replaced labels keep already-shown keyboards usable."""
+    labels = {_schedule_keyboard_label(bot_data, key)}
+    aliases = bot_data.get("schedule_button_aliases", {}).get(key, [])
+    labels.update(
+        _normalize_schedule_keyboard_text(label)
+        for label in aliases
+        if _normalize_schedule_keyboard_text(label)
+    )
+    return labels
+
+
+def _remember_schedule_button_alias(bot_data: dict, key: str) -> None:
+    """Keep the old displayed label routable after an owner customizes it."""
+    old_label = _schedule_keyboard_label(bot_data, key)
+    aliases_by_key = bot_data.setdefault("schedule_button_aliases", {})
+    aliases = aliases_by_key.setdefault(key, [])
+    if old_label and old_label not in aliases:
+        aliases.append(old_label)
+    aliases_by_key[key] = aliases[-20:]
 
 
 def _get_first_custom_emoji_id(bot_data: dict, key: str) -> str | None:
@@ -862,6 +964,8 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
 
     if text.strip() == "/reset":
         custom = _get_custom_msgs(context.application.bot_data)
+        if key in {"schedule_set_button", "schedule_remove_button"}:
+            _remember_schedule_button_alias(context.application.bot_data, key)
         if key == "number_words_link":
             context.application.bot_data.pop("number_words_link", None)
         else:
@@ -914,6 +1018,8 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
             entities_raw = None
 
     custom = _get_custom_msgs(context.application.bot_data)
+    if key in {"schedule_set_button", "schedule_remove_button"}:
+        _remember_schedule_button_alias(context.application.bot_data, key)
     message_config = {"text": text, "entities": entities_raw}
     if key == "form":
         # /form now stores the complete user-provided message, including all
@@ -1760,24 +1866,36 @@ async def report_form_command(update: Update, context: CallbackContext) -> None:
     )
 
 
-def _main_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Build the persistent user-facing reply keyboard."""
-    return ReplyKeyboardMarkup(
+def _main_reply_keyboard(bot_data: dict, include_schedule: bool = False) -> ReplyKeyboardMarkup:
+    """Build the persistent keyboard; schedule controls are group-only."""
+    rows = [
         [
-            [
-                KeyboardButton("Showdata", style="primary"),
-                KeyboardButton("Total Plus", style="primary"),
-            ],
-            [
-                KeyboardButton("Clear Data", style="danger"),
-                KeyboardButton("Reset Plus", style="danger"),
-            ],
-            [
-                KeyboardButton("Clear All", style="success"),
-                KeyboardButton("Reset Plus All", style="success"),
-            ],
-            [KeyboardButton(NUMBER_WORDS_BUTTON, style="primary")],
+            KeyboardButton("Showdata", style="primary"),
+            KeyboardButton("Total Plus", style="primary"),
         ],
+        [
+            KeyboardButton("Clear Data", style="danger"),
+            KeyboardButton("Reset Plus", style="danger"),
+        ],
+        [
+            KeyboardButton("Clear All", style="success"),
+            KeyboardButton("Reset Plus All", style="success"),
+        ],
+    ]
+    if include_schedule:
+        rows.append([
+            KeyboardButton(
+                _schedule_keyboard_label(bot_data, "schedule_set_button"),
+                style="primary",
+            ),
+            KeyboardButton(
+                _schedule_keyboard_label(bot_data, "schedule_remove_button"),
+                style="danger",
+            ),
+        ])
+    rows.append([KeyboardButton(NUMBER_WORDS_BUTTON, style="primary")])
+    return ReplyKeyboardMarkup(
+        rows,
         resize_keyboard=True,
         one_time_keyboard=False,
     )
@@ -1792,11 +1910,17 @@ async def ensure_reply_keyboard(update: Update, context: CallbackContext) -> Non
     text = (message.text or "").strip()
     if re.match(r"^/(?:start|menu)(?:@\w+)?(?:\s|$)", text, re.IGNORECASE):
         return
-    if context.chat_data.get("reply_keyboard_sent"):
+    if context.chat_data.get("reply_keyboard_version") == "group-schedules-v1":
         return
 
     context.chat_data["reply_keyboard_sent"] = True
-    await message.reply_text("Menu", reply_markup=_main_reply_keyboard())
+    context.chat_data["reply_keyboard_version"] = "group-schedules-v1"
+    bot_data = context.application.bot_data
+    include_schedule = update.effective_chat.type in {"group", "supergroup"}
+    await message.reply_text(
+        "Menu",
+        reply_markup=_main_reply_keyboard(bot_data, include_schedule=include_schedule),
+    )
 
 
 async def main_menu_command(
@@ -1804,7 +1928,10 @@ async def main_menu_command(
 ) -> None:
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
     context.chat_data["reply_keyboard_sent"] = True
-    reply_markup = _main_reply_keyboard()
+    context.chat_data["reply_keyboard_version"] = "group-schedules-v1"
+    bot_data = context.application.bot_data
+    include_schedule = update.effective_chat.type in {"group", "supergroup"}
+    reply_markup = _main_reply_keyboard(bot_data, include_schedule=include_schedule)
     if show_welcome:
         user_name = update.effective_user.full_name if update.effective_user else "User"
         bot_username = context.bot.username
@@ -3191,232 +3318,543 @@ async def whatsapp_total_command(update: Update, context: CallbackContext) -> No
 # SCHEDULE
 # ============================================================
 
+def _is_group_chat(chat) -> bool:
+    return bool(chat and chat.type in {"group", "supergroup"})
+
+
+def _schedule_belongs_to_group(schedule: dict, group_id: int) -> bool:
+    return any(str(value) == str(group_id) for value in schedule.get("group_ids", []))
+
+
+async def _require_group_schedule_admin(
+    update: Update, context: CallbackContext
+) -> bool:
+    """Schedules can only be managed by a group creator/administrator in that group."""
+    chat = update.effective_chat
+    user = update.effective_user
+    message = _update_message(update)
+    bot_data = context.application.bot_data
+
+    if not _is_group_chat(chat):
+        if message:
+            await _reply_custom(message, bot_data, "schedule_group_only")
+        return False
+
+    if not user:
+        if message:
+            await _reply_custom(message, bot_data, "schedule_admin_only")
+        return False
+
+    try:
+        member = await context.bot.get_chat_member(chat_id=chat.id, user_id=user.id)
+        allowed = member.status in {"creator", "administrator"}
+    except Exception as exc:
+        logging.warning(
+            "Could not verify schedule permission for user %s in group %s: %s",
+            user.id, chat.id, exc
+        )
+        allowed = False
+
+    if not allowed and message:
+        await _reply_custom(message, bot_data, "schedule_admin_only")
+    return allowed
+
+
+def _schedule_type_label(bot_data: dict, schedule: dict) -> str:
+    key = "schedule_type_once_label" if schedule.get("type") == "once" else "schedule_type_daily_label"
+    return get_msg(bot_data, key)
+
+
+def _schedule_picker_label(
+    bot_data: dict, sched_id: str, schedule: dict
+) -> str:
+    """Build a unique reply-keyboard choice and keep its ID visible."""
+    schedule_time = f"{int(schedule.get('hour', 0)):02d}:{int(schedule.get('minute', 0)):02d}"
+    rendered = get_msg(
+        bot_data,
+        "schedule_list_item",
+        time=schedule_time,
+        type=_schedule_type_label(bot_data, schedule),
+        id=sched_id,
+        message=str(schedule.get("message", ""))[:40],
+    )
+    rendered = " ".join(str(rendered or "").split()).strip()
+    # Always reserve space for the ID so duplicate/custom labels remain unique.
+    prefix = rendered.replace(str(sched_id), "", 1).strip(" •|·-")
+    suffix = f" · {sched_id}"
+    prefix = prefix[:max(0, 64 - len(suffix))]
+    return f"{prefix}{suffix}" if prefix else str(sched_id)[:64]
+
+
 async def scheduled_message_job(context: CallbackContext) -> None:
-    sched_id = context.job.data.get('sched_id')
-    schedules = context.application.bot_data.get('schedules', {})
+    sched_id = context.job.data.get("sched_id")
+    schedules = context.application.bot_data.get("schedules", {})
     sched = schedules.get(sched_id)
     if not sched:
         return
 
-    for group_id in sched.get('group_ids', []):
+    for group_id in sched.get("group_ids", []):
         try:
-            await context.application.bot.send_message(chat_id=group_id, text=sched['message'])
-        except Exception as e:
-            logging.warning(f"Scheduled message failed for {group_id}: {e}")
+            await context.application.bot.send_message(
+                chat_id=int(group_id), text=sched["message"]
+            )
+        except Exception as exc:
+            logging.warning("Scheduled message failed for %s: %s", group_id, exc)
 
-    if sched.get('type') == 'once':
+    if sched.get("type") == "once":
+        mongo_result = delete_schedule_from_mongo(sched_id)
+        if mongo_result is False:
+            logging.error("One-time schedule %s could not be deleted from MongoDB", sched_id)
         schedules.pop(sched_id, None)
-        delete_schedule_from_mongo(sched_id)
         if context.application.persistence:
             await context.application.persistence.flush()
 
 
 async def setschedule_command(update: Update, context: CallbackContext) -> int:
-    if update.effective_user.id not in ADMIN_IDS:
+    if not await _require_group_schedule_admin(update, context):
         return ConversationHandler.END
-    await update.message.reply_text(
-        "⏰ Schedule time ကို HH:MM ပုံစံဖြင့် ရိုက်ပါ (Yangon time):\nဥပမာ: 09:30\n\n(/cancel ဖြင့် ရပ်)"
+
+    chat = update.effective_chat
+    context.user_data["new_schedule_group_id"] = chat.id
+    for key in (
+        "new_schedule_hour", "new_schedule_minute",
+        "new_schedule_message", "new_schedule_type",
+    ):
+        context.user_data.pop(key, None)
+
+    await _reply_custom(
+        _update_message(update),
+        context.application.bot_data,
+        "schedule_time_prompt",
     )
     return SCHEDULE_SET_TIME
 
 
 async def schedule_set_time(update: Update, context: CallbackContext) -> int:
-    m = re.match(r'^(\d{1,2}):(\d{2})$', update.message.text.strip())
-    if not m:
-        await update.message.reply_text("❌ HH:MM ပုံစံ မမှန်ပါ (ဥပမာ: 09:30)")
+    message = update.effective_message
+    text = (message.text or "").strip() if message else ""
+    match = re.match(r"^(\d{1,2}):(\d{2})$", text)
+    bot_data = context.application.bot_data
+    if not match:
+        await _reply_custom(message, bot_data, "schedule_invalid_time")
         return SCHEDULE_SET_TIME
-    hour, minute = int(m.group(1)), int(m.group(2))
+
+    hour, minute = int(match.group(1)), int(match.group(2))
     if hour > 23 or minute > 59:
-        await update.message.reply_text("❌ အချိန်မမှန်ပါ။")
+        await _reply_custom(message, bot_data, "schedule_invalid_time_value")
         return SCHEDULE_SET_TIME
-    context.user_data['new_schedule_hour'] = hour
-    context.user_data['new_schedule_minute'] = minute
-    await update.message.reply_text(f"✅ {hour:02d}:{minute:02d} (Yangon)\n\nMessage ကို ရိုက်ထည့်ပါ:")
+
+    context.user_data["new_schedule_hour"] = hour
+    context.user_data["new_schedule_minute"] = minute
+    await _reply_custom(
+        message, bot_data, "schedule_message_prompt", time=f"{hour:02d}:{minute:02d}"
+    )
     return SCHEDULE_SET_MESSAGE
 
 
 async def schedule_set_message(update: Update, context: CallbackContext) -> int:
-    context.user_data['new_schedule_message'] = update.message.text
+    message = update.effective_message
+    context.user_data["new_schedule_message"] = message.text if message else ""
+    bot_data = context.application.bot_data
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("1️⃣ One-time", callback_data='sched_type_once', style="primary")],
-        [InlineKeyboardButton("🔁 Every Day", callback_data='sched_type_daily', style="primary")],
-        [InlineKeyboardButton("❌ Cancel", callback_data='sched_cancel', style="danger")],
+        [InlineKeyboardButton(
+            _schedule_keyboard_label(bot_data, "schedule_once_button"),
+            callback_data="sched_type_once",
+            style="primary",
+        )],
+        [InlineKeyboardButton(
+            _schedule_keyboard_label(bot_data, "schedule_daily_button"),
+            callback_data="sched_type_daily",
+            style="primary",
+        )],
+        [InlineKeyboardButton(
+            _schedule_keyboard_label(bot_data, "schedule_cancel_button"),
+            callback_data="sched_cancel",
+            style="danger",
+        )],
     ])
-    await update.message.reply_text("📌 Schedule type ရွေးပါ:", reply_markup=keyboard)
+    await _reply_custom(
+        message, bot_data, "schedule_type_prompt",
+        reply_markup=keyboard,
+        time=f"{int(context.user_data['new_schedule_hour']):02d}:{int(context.user_data['new_schedule_minute']):02d}",
+    )
     return SCHEDULE_SELECT_TYPE
 
 
 async def schedule_select_type(update: Update, context: CallbackContext) -> int:
     query = update.callback_query
     await query.answer()
+    bot_data = context.application.bot_data
 
-    if query.data == 'sched_cancel':
-        await query.edit_message_text("❌ ဖျက်သိမ်းလိုက်ပါသည်။")
+    if query.data == "sched_cancel":
+        await _edit_custom(query, bot_data, "schedule_cancelled")
+        for key in (
+            "new_schedule_group_id", "new_schedule_hour", "new_schedule_minute",
+            "new_schedule_message", "new_schedule_type",
+        ):
+            context.user_data.pop(key, None)
         return ConversationHandler.END
 
-    context.user_data['new_schedule_type'] = 'once' if query.data == 'sched_type_once' else 'daily'
-    type_label = "1️⃣ One-time" if context.user_data['new_schedule_type'] == 'once' else "🔁 Every Day"
-
-    groups = context.application.bot_data.get('groups', set())
-    if not groups:
-        await query.edit_message_text("❌ Group မရှိသေးပါ။ Bot ကို group ထဲ ထည့်ပါ။")
+    if query.data not in {"sched_type_once", "sched_type_daily"}:
+        await _edit_custom(query, bot_data, "schedule_missing_data")
         return ConversationHandler.END
 
-    keyboard = []
-    for group_id in sorted(list(groups)):
+    if not await _require_group_schedule_admin(update, context):
         try:
-            chat = await context.application.bot.get_chat(chat_id=group_id)
-            name = chat.title or f"Group {group_id}"
+            await query.edit_message_reply_markup(reply_markup=None)
         except Exception:
-            name = f"Group {group_id}"
-        keyboard.append([
-            InlineKeyboardButton(
-                f"👥 {name}",
-                callback_data=f'sched_grp_{group_id}',
-                style="primary",
-            )
-        ])
-    keyboard.append([
-        InlineKeyboardButton(
-            "✅ All Groups",
-            callback_data='sched_grp_ALL',
-            style="success",
-        )
-    ])
-    keyboard.append([
-        InlineKeyboardButton(
-            "❌ Cancel",
-            callback_data='sched_cancel',
-            style="danger",
-        )
-    ])
+            pass
+        return ConversationHandler.END
 
-    await query.edit_message_text(
-        f"✅ Type: <b>{type_label}</b>\n\n👥 Group ရွေးပါ:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode='HTML'
-    )
-    return SCHEDULE_SELECT_GROUP
+    group_id = context.user_data.get("new_schedule_group_id")
+    if not _is_group_chat(update.effective_chat) or str(group_id) != str(query.message.chat_id):
+        await _edit_custom(query, bot_data, "schedule_missing_data")
+        return ConversationHandler.END
 
-
-async def schedule_select_group(update: Update, context: CallbackContext) -> int:
-    import uuid
-    from datetime import datetime as _dt, timedelta as _td
-
-    query = update.callback_query
-    await query.answer()
-
-    hour = context.user_data.pop('new_schedule_hour', None)
-    minute = context.user_data.pop('new_schedule_minute', None)
-    message_text = context.user_data.pop('new_schedule_message', None)
-    sched_type = context.user_data.pop('new_schedule_type', 'daily')
-
+    hour = context.user_data.pop("new_schedule_hour", None)
+    minute = context.user_data.pop("new_schedule_minute", None)
+    message_text = context.user_data.pop("new_schedule_message", None)
     if hour is None or minute is None or not message_text:
-        await query.edit_message_text("❌ အချက်အလက် မပြည့်စုံပါ။")
+        await _edit_custom(query, bot_data, "schedule_missing_data")
         return ConversationHandler.END
 
-    groups = context.application.bot_data.get('groups', set())
-    if query.data == 'sched_grp_ALL':
-        selected_groups = list(groups)
-    elif query.data.startswith('sched_grp_'):
-        selected_groups = [int(query.data[len('sched_grp_'):])]
-    elif query.data == 'sched_cancel':
-        await query.edit_message_text("❌ ဖျက်သိမ်းလိုက်ပါသည်။")
-        return ConversationHandler.END
-    else:
-        await query.edit_message_text("❌ Invalid.")
-        return ConversationHandler.END
+    schedule_type = "once" if query.data == "sched_type_once" else "daily"
+    from datetime import datetime as _dt, timedelta as _td
+    import uuid
 
+    schedules = context.application.bot_data.setdefault("schedules", {})
     sched_id = str(uuid.uuid4())[:8]
-    context.application.bot_data.setdefault('schedules', {})[sched_id] = {
-        'hour': hour, 'minute': minute, 'message': message_text,
-        'group_ids': selected_groups, 'type': sched_type,
+    while sched_id in schedules:
+        sched_id = str(uuid.uuid4())[:8]
+    schedule = {
+        "hour": int(hour),
+        "minute": int(minute),
+        "message": str(message_text),
+        "group_ids": [int(group_id)],
+        "type": schedule_type,
     }
-    save_schedule_to_mongo(
-        sched_id,
-        context.application.bot_data['schedules'][sched_id],
-    )
+    schedules[sched_id] = schedule
 
-    tz = get_yangon_tz()
-    if sched_type == 'once':
-        now = _dt.now(tz)
-        target_dt = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if target_dt <= now:
-            target_dt += _td(days=1)
-        context.application.job_queue.run_once(scheduled_message_job, when=target_dt, name=sched_id, data={'sched_id': sched_id})
-        fire_label = target_dt.strftime("%Y-%m-%d %H:%M") + " (Yangon)"
-    else:
-        context.application.job_queue.run_daily(
-            scheduled_message_job, time=time(hour=hour, minute=minute, tzinfo=tz), name=sched_id, data={'sched_id': sched_id}
-        )
-        fire_label = f"နေ့တိုင်း {hour:02d}:{minute:02d} (Yangon)"
+    mongo_result = save_schedule_to_mongo(sched_id, schedule)
+    if mongo_result is False:
+        schedules.pop(sched_id, None)
+        await _edit_custom(query, bot_data, "schedule_save_failed")
+        return ConversationHandler.END
+
+    try:
+        tz = get_yangon_tz()
+        if schedule_type == "once":
+            now = _dt.now(tz)
+            target_dt = now.replace(
+                hour=int(hour), minute=int(minute), second=0, microsecond=0
+            )
+            if target_dt <= now:
+                target_dt += _td(days=1)
+            context.application.job_queue.run_once(
+                scheduled_message_job,
+                when=target_dt,
+                name=sched_id,
+                data={"sched_id": sched_id},
+            )
+            fire_label = target_dt.strftime("%Y-%m-%d %H:%M") + " (Yangon)"
+        else:
+            context.application.job_queue.run_daily(
+                scheduled_message_job,
+                time=time(hour=int(hour), minute=int(minute), tzinfo=tz),
+                name=sched_id,
+                data={"sched_id": sched_id},
+            )
+            fire_label = f"နေ့တိုင်း {int(hour):02d}:{int(minute):02d} (Yangon)"
+    except Exception as exc:
+        logging.exception("Could not schedule job %s: %s", sched_id, exc)
+        schedules.pop(sched_id, None)
+        delete_schedule_from_mongo(sched_id)
+        await _edit_custom(query, bot_data, "schedule_create_failed")
+        return ConversationHandler.END
 
     if context.application.persistence:
         await context.application.persistence.flush()
 
-    group_names = []
-    for gid in selected_groups:
-        try:
-            chat = await context.application.bot.get_chat(chat_id=gid)
-            group_names.append(chat.title or str(gid))
-        except Exception:
-            group_names.append(str(gid))
+    chat = update.effective_chat
+    group_name = chat.title or str(group_id)
+    if len(message_text) > 60:
+        message_preview = message_text[:57] + "..."
+    else:
+        message_preview = message_text
 
-    await query.edit_message_text(
-        f"✅ <b>Schedule ထည့်ပြီး!</b>\n\n"
-        f"⏰ {fire_label}\n💬 {message_text[:60]}{'...' if len(message_text) > 60 else ''}\n"
-        f"👥 {', '.join(group_names)}\n🆔 <code>{sched_id}</code>",
-        parse_mode='HTML'
+    await _edit_custom(
+        query,
+        bot_data,
+        "schedule_saved",
+        fire_label=fire_label,
+        message=message_preview,
+        group_name=group_name,
+        schedule_id=sched_id,
     )
-    return ConversationHandler.END
-
-
-async def schedule_cancel(update: Update, context: CallbackContext) -> int:
-    if update.callback_query:
-        await update.callback_query.answer()
-        await update.callback_query.edit_message_text("❌ ဖျက်သိမ်းလိုက်ပါသည်။")
-    elif update.message:
-        await update.message.reply_text("❌ Cancelled.")
-    for key in ['new_schedule_hour', 'new_schedule_minute', 'new_schedule_message', 'new_schedule_type']:
+    for key in (
+        "new_schedule_group_id", "new_schedule_hour", "new_schedule_minute",
+        "new_schedule_message", "new_schedule_type",
+    ):
         context.user_data.pop(key, None)
     return ConversationHandler.END
 
 
-async def listschedules_command(update: Update, context: CallbackContext) -> None:
-    schedules = context.application.bot_data.get('schedules', {})
-    if not schedules:
-        await update.message.reply_text("⏰ Active schedule မရှိသေးပါ။")
+async def schedule_cancel(update: Update, context: CallbackContext) -> int:
+    bot_data = context.application.bot_data
+    message = _update_message(update)
+    if update.callback_query:
+        await update.callback_query.answer()
+        await _edit_custom(update.callback_query, bot_data, "schedule_cancelled")
+    elif message:
+        await _reply_custom(message, bot_data, "schedule_cancelled")
+    for key in (
+        "new_schedule_group_id", "new_schedule_hour", "new_schedule_minute",
+        "new_schedule_message", "new_schedule_type",
+    ):
+        context.user_data.pop(key, None)
+    return ConversationHandler.END
+
+
+async def _show_group_schedule_picker(
+    update: Update, context: CallbackContext, schedule_id_filter: str | None = None
+) -> None:
+    message = _update_message(update)
+    chat = update.effective_chat
+    bot_data = context.application.bot_data
+    schedules = bot_data.get("schedules", {})
+    group_schedules = [
+        (str(sched_id), sched)
+        for sched_id, sched in schedules.items()
+        if _schedule_belongs_to_group(sched, chat.id)
+        and (schedule_id_filter is None or str(sched_id) == str(schedule_id_filter))
+    ]
+
+    if not group_schedules:
+        context.user_data.pop("schedule_remove_menu", None)
+        await _reply_custom(
+            message, bot_data, "schedule_remove_none",
+            reply_markup=_main_reply_keyboard(bot_data, include_schedule=True),
+        )
         return
 
-    text = "⏰ <b>Active Schedules:</b>\n\n"
-    for i, (sched_id, s) in enumerate(schedules.items(), 1):
-        t = "1️⃣ One-time" if s.get('type') == 'once' else "🔁 Daily"
-        text += f"{i}. <code>{sched_id}</code> | {t} | {s['hour']:02d}:{s['minute']:02d} | Groups: {len(s['group_ids'])}\n"
-        text += f"   💬 {s['message'][:50]}{'...' if len(s['message']) > 50 else ''}\n\n"
-    await update.message.reply_text(text, parse_mode='HTML')
+    options = {}
+    keyboard = []
+    for sched_id, sched in sorted(
+        group_schedules, key=lambda item: (int(item[1].get("hour", 0)), int(item[1].get("minute", 0)), item[0])
+    ):
+        label = _schedule_picker_label(bot_data, sched_id, sched)
+        options[label] = sched_id
+        keyboard.append([KeyboardButton(label)])
+
+    cancel_label = _schedule_keyboard_label(bot_data, "schedule_remove_cancel_button")
+    keyboard.append([KeyboardButton(cancel_label)])
+    context.user_data["schedule_remove_menu"] = {
+        "chat_id": chat.id,
+        "options": options,
+        "cancel_label": cancel_label,
+    }
+    await _reply_custom(
+        message,
+        bot_data,
+        "schedule_remove_prompt",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard, resize_keyboard=True, one_time_keyboard=True
+        ),
+    )
 
 
 async def removeschedule_command(update: Update, context: CallbackContext) -> None:
-    if not context.args:
-        await update.message.reply_text("Usage: /removeschedule <schedule_id>\n/listschedules ဖြင့် IDs ကြည့်ပါ")
+    if not await _require_group_schedule_admin(update, context):
         return
-    sched_id = context.args[0].strip()
-    schedules = context.application.bot_data.get('schedules', {})
-    if sched_id not in schedules:
-        await update.message.reply_text(f"❌ Schedule <code>{sched_id}</code> မတွေ့ပါ။", parse_mode='HTML')
+    schedule_filter = context.args[0].strip() if context.args else None
+    await _show_group_schedule_picker(update, context, schedule_filter)
+
+
+async def schedule_remove_text_handler(
+    update: Update, context: CallbackContext
+) -> None:
+    message = update.effective_message
+    if not message or not message.text:
         return
-    mongo_delete_result = delete_schedule_from_mongo(sched_id)
-    if mongo_delete_result is False:
-        await update.message.reply_text(
-            "❌ MongoDB မှာ schedule မဖျက်နိုင်သေးပါ။ ခဏအကြာတွင် ထပ်စမ်းပါ။"
+    if not await _require_group_schedule_admin(update, context):
+        return
+
+    text = message.text.strip()
+    bot_data = context.application.bot_data
+    if text in _schedule_keyboard_labels(bot_data, "schedule_remove_button"):
+        context.user_data.pop("schedule_remove_menu", None)
+        await _show_group_schedule_picker(update, context)
+        return
+
+    menu = context.user_data.get("schedule_remove_menu", {})
+    if str(menu.get("chat_id")) != str(update.effective_chat.id):
+        return
+
+    if text == menu.get("cancel_label"):
+        context.user_data.pop("schedule_remove_menu", None)
+        await _reply_custom(
+            message,
+            bot_data,
+            "schedule_remove_cancelled",
+            reply_markup=_main_reply_keyboard(bot_data, include_schedule=True),
         )
         return
-    sched = schedules.pop(sched_id)
-    for job in context.application.job_queue.get_jobs_by_name(sched_id):
-        job.schedule_removal()
+
+    sched_id = menu.get("options", {}).get(text)
+    if not sched_id:
+        return
+
+    schedule = bot_data.get("schedules", {}).get(sched_id)
+    if not schedule or not _schedule_belongs_to_group(schedule, update.effective_chat.id):
+        context.user_data.pop("schedule_remove_menu", None)
+        await _reply_custom(
+            message,
+            bot_data,
+            "schedule_not_found",
+            reply_markup=_main_reply_keyboard(bot_data, include_schedule=True),
+        )
+        return
+
+    schedule_time = f"{int(schedule.get('hour', 0)):02d}:{int(schedule.get('minute', 0)):02d}"
+    confirm_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            _schedule_keyboard_label(bot_data, "schedule_delete_button"),
+            callback_data=f"sched_remove_delete_{sched_id}",
+            style="danger",
+        )],
+        [InlineKeyboardButton(
+            _schedule_keyboard_label(bot_data, "schedule_delete_cancel_button"),
+            callback_data="sched_remove_cancel",
+            style="primary",
+        )],
+    ])
+    await _reply_custom(
+        message,
+        bot_data,
+        "schedule_remove_confirm",
+        reply_markup=confirm_keyboard,
+        time=schedule_time,
+        type=_schedule_type_label(bot_data, schedule),
+        message=str(schedule.get("message", ""))[:300],
+        id=sched_id,
+    )
+
+
+async def schedule_remove_callback(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    await query.answer()
+    bot_data = context.application.bot_data
+
+    if not await _require_group_schedule_admin(update, context):
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        return
+
+    chat = update.effective_chat
+    data = query.data
+    if data == "sched_remove_cancel":
+        context.user_data.pop("schedule_remove_menu", None)
+        await _edit_custom(query, bot_data, "schedule_remove_cancelled")
+        await query.message.reply_text(
+            get_msg(bot_data, "schedule_menu_restored"),
+            reply_markup=_main_reply_keyboard(bot_data, include_schedule=True),
+        )
+        return
+
+    match = re.fullmatch(r"sched_remove_delete_([A-Za-z0-9_-]+)", data or "")
+    if not match:
+        await _edit_custom(query, bot_data, "schedule_not_found")
+        return
+    sched_id = match.group(1)
+    schedules = bot_data.get("schedules", {})
+    schedule = schedules.get(sched_id)
+    if not schedule or not _schedule_belongs_to_group(schedule, chat.id):
+        context.user_data.pop("schedule_remove_menu", None)
+        await _edit_custom(query, bot_data, "schedule_not_found")
+        await query.message.reply_text(
+            get_msg(bot_data, "schedule_menu_restored"),
+            reply_markup=_main_reply_keyboard(bot_data, include_schedule=True),
+        )
+        return
+
+    schedule_time = f"{int(schedule.get('hour', 0)):02d}:{int(schedule.get('minute', 0)):02d}"
+    remaining_groups = [
+        value for value in schedule.get("group_ids", [])
+        if str(value) != str(chat.id)
+    ]
+
+    # Legacy admin-created schedules may contain several groups. Detach only this
+    # group, preserving the other groups' jobs and MongoDB document.
+    if remaining_groups:
+        updated_schedule = dict(schedule)
+        updated_schedule["group_ids"] = remaining_groups
+        mongo_result = save_schedule_to_mongo(sched_id, updated_schedule)
+        if mongo_result is False:
+            await _edit_custom(query, bot_data, "schedule_delete_failed")
+            return
+        schedule["group_ids"] = remaining_groups
+    else:
+        mongo_result = delete_schedule_from_mongo(sched_id)
+        if mongo_result is False:
+            await _edit_custom(query, bot_data, "schedule_delete_failed")
+            return
+        schedules.pop(sched_id, None)
+        for job in context.application.job_queue.get_jobs_by_name(sched_id):
+            job.schedule_removal()
+
     if context.application.persistence:
         await context.application.persistence.flush()
-    await update.message.reply_text(f"✅ Schedule <code>{sched_id}</code> ({sched['hour']:02d}:{sched['minute']:02d}) ဖျက်ပြီးပါပြီ။", parse_mode='HTML')
+
+    context.user_data.pop("schedule_remove_menu", None)
+    await _edit_custom(
+        query, bot_data, "schedule_delete_success", id=sched_id, time=schedule_time
+    )
+    await query.message.reply_text(
+        get_msg(bot_data, "schedule_menu_restored"),
+        reply_markup=_main_reply_keyboard(bot_data, include_schedule=True),
+    )
+
+
+async def listschedules_command(update: Update, context: CallbackContext) -> None:
+    if not await _require_group_schedule_admin(update, context):
+        return
+
+    bot_data = context.application.bot_data
+    chat_id = update.effective_chat.id
+    schedules = [
+        (str(sched_id), schedule)
+        for sched_id, schedule in bot_data.get("schedules", {}).items()
+        if _schedule_belongs_to_group(schedule, chat_id)
+    ]
+    if not schedules:
+        await _reply_custom(update.effective_message, bot_data, "schedule_remove_none")
+        return
+
+    rows = []
+    for index, (sched_id, schedule) in enumerate(schedules, 1):
+        schedule_type = _schedule_type_label(bot_data, schedule)
+        schedule_time = f"{int(schedule.get('hour', 0)):02d}:{int(schedule.get('minute', 0)):02d}"
+        preview = str(schedule.get("message", ""))[:50]
+        if len(str(schedule.get("message", ""))) > 50:
+            preview += "..."
+        rows.append(get_msg(
+            bot_data,
+            "schedule_list_text_item",
+            i=index,
+            id=sched_id,
+            type=schedule_type,
+            time=schedule_time,
+            group_count=len(schedule.get("group_ids", [])),
+            message=preview,
+        ))
+    await _reply_custom(
+        update.effective_message,
+        bot_data,
+        "schedule_lists_prompt",
+        suffix="".join(rows),
+    )
 
 
 def save_schedule_to_mongo(sched_id: str, sched: dict) -> bool | None:
@@ -4134,6 +4572,35 @@ def main():
         & filters.ChatType.PRIVATE,
         number_words_start,
     ))
+    # The filters read current /setmsg labels and retain aliases for already-shown keyboards.
+    schedule_set_button_filter = filters.create(
+        lambda message: bool(
+            message.text
+            and _normalize_schedule_keyboard_text(message.text) in
+            _schedule_keyboard_labels(application.bot_data, "schedule_set_button")
+        )
+    ) & filters.ChatType.GROUPS
+
+    def _matches_schedule_remove_action(message):
+        if not message or not message.text or not message.from_user or not message.chat:
+            return False
+        text = message.text.strip()
+        if text in _schedule_keyboard_labels(application.bot_data, "schedule_remove_button"):
+            return True
+        user_state = application.user_data.get(message.from_user.id, {})
+        menu = user_state.get("schedule_remove_menu", {})
+        if str(menu.get("chat_id")) != str(message.chat.id):
+            return False
+        return text == menu.get("cancel_label") or text in menu.get("options", {})
+
+    schedule_remove_action_filter = filters.create(
+        _matches_schedule_remove_action
+    ) & filters.ChatType.GROUPS
+    application.add_handler(MessageHandler(
+        schedule_remove_action_filter,
+        schedule_remove_text_handler,
+    ))
+
     application.add_handler(MessageHandler(
         filters.TEXT & filters.Regex(
             r'^(Showdata|Total Plus|Clear Data|Reset Plus|Clear All|Reset Plus All)$'
@@ -4285,20 +4752,26 @@ def main():
     application.add_handler(broadcast_handler)
 
     schedule_handler = ConversationHandler(
-        entry_points=[CommandHandler("setschedule", setschedule_command)],
+        entry_points=[
+            CommandHandler("setschedule", setschedule_command),
+            MessageHandler(schedule_set_button_filter, setschedule_command),
+        ],
         states={
             SCHEDULE_SET_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule_set_time)],
             SCHEDULE_SET_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule_set_message)],
-            SCHEDULE_SELECT_TYPE: [CallbackQueryHandler(schedule_select_type, pattern='^sched_type_|^sched_cancel$')],
-            SCHEDULE_SELECT_GROUP: [CallbackQueryHandler(schedule_select_group, pattern='^sched_grp_|^sched_cancel$')],
+            SCHEDULE_SELECT_TYPE: [CallbackQueryHandler(schedule_select_type, pattern=r'^sched_type_|^sched_cancel$')],
         },
         fallbacks=[
-            CallbackQueryHandler(schedule_cancel, pattern='^sched_cancel$'),
+            CallbackQueryHandler(schedule_cancel, pattern=r'^sched_cancel$'),
             CommandHandler('cancel', cancel_conversation)
         ],
-        allow_reentry=True
+        allow_reentry=True,
     )
     application.add_handler(schedule_handler)
+    application.add_handler(CallbackQueryHandler(
+        schedule_remove_callback,
+        pattern=r'^sched_remove_(?:delete_[A-Za-z0-9_-]+|cancel)$',
+    ))
 
     application.add_handler(MessageHandler(filters.REPLY & filters.Regex(r'^\+$'), handle_plus_reply))
     application.add_handler(MessageHandler(filters.REPLY & filters.Regex(r'^\-$'), handle_minus_reply))
