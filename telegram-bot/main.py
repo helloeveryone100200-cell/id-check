@@ -4817,6 +4817,34 @@ def main():
     )
     application.add_handler(setmsg_handler)
 
+    schedule_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("setschedule", setschedule_command),
+            MessageHandler(schedule_set_button_filter, setschedule_command),
+        ],
+        states={
+            SCHEDULE_SET_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule_set_time)],
+            SCHEDULE_SET_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule_set_message)],
+            SCHEDULE_SELECT_TYPE: [CallbackQueryHandler(schedule_select_type, pattern=r'^sched_type_|^sched_cancel$')],
+        },
+        fallbacks=[
+            CallbackQueryHandler(schedule_cancel, pattern=r'^sched_cancel$'),
+            CommandHandler('cancel', cancel_conversation)
+        ],
+        allow_reentry=True,
+    )
+    application.add_handler(schedule_handler)
+    # Give an active Set Schedule conversation first refusal on text input. This
+    # prevents a schedule message equal to a menu label from being intercepted.
+    application.add_handler(MessageHandler(
+        schedule_remove_action_filter,
+        schedule_remove_text_handler,
+    ))
+    application.add_handler(CallbackQueryHandler(
+        schedule_remove_callback,
+        pattern=r'^sched_remove_(?:delete_[A-Za-z0-9_-]+|cancel)$',
+    ))
+
     feedback_handler = ConversationHandler(
         entry_points=[CommandHandler("feedback", start_feedback)],
         states={FEEDBACK_AWAITING: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_feedback)]},
@@ -4845,33 +4873,6 @@ def main():
     )
     application.add_handler(broadcast_handler)
 
-    schedule_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("setschedule", setschedule_command),
-            MessageHandler(schedule_set_button_filter, setschedule_command),
-        ],
-        states={
-            SCHEDULE_SET_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule_set_time)],
-            SCHEDULE_SET_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule_set_message)],
-            SCHEDULE_SELECT_TYPE: [CallbackQueryHandler(schedule_select_type, pattern=r'^sched_type_|^sched_cancel$')],
-        },
-        fallbacks=[
-            CallbackQueryHandler(schedule_cancel, pattern=r'^sched_cancel$'),
-            CommandHandler('cancel', cancel_conversation)
-        ],
-        allow_reentry=True,
-    )
-    application.add_handler(schedule_handler)
-    # Give an active Set Schedule conversation first refusal on text input. This
-    # prevents a schedule message equal to a menu label from being intercepted.
-    application.add_handler(MessageHandler(
-        schedule_remove_action_filter,
-        schedule_remove_text_handler,
-    ))
-    application.add_handler(CallbackQueryHandler(
-        schedule_remove_callback,
-        pattern=r'^sched_remove_(?:delete_[A-Za-z0-9_-]+|cancel)$',
-    ))
 
     application.add_handler(MessageHandler(filters.REPLY & filters.Regex(r'^\+$'), handle_plus_reply))
     application.add_handler(MessageHandler(filters.REPLY & filters.Regex(r'^\-$'), handle_minus_reply))
