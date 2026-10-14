@@ -90,6 +90,7 @@ CUSTOM_MSG_LABELS = {
     "reset_plus_cancelled":"❌ /reset_plus — Cancelled confirmation message",
     "confirm_button":   "✅ Confirmation — Confirm button text",
     "cancel_button":    "❌ Confirmation — Cancel button text",
+    "owner_only_action_denied": "🔒 Owner-only actions — Access denied message",
     "plus_reaction":    "⚙️ Plus counter reaction",
     "plus_fmt":         "➕ Plus count format  ({count} သုံးပါ)",
     "digit_emoji":      "🔢 Animated number emoji (0→9 အစဉ်လိုက်)",
@@ -151,6 +152,7 @@ DEFAULT_MSGS: dict = {
     "reset_plus_cancelled":"❌ Plus counter reset လုပ်ဆောင်ချက်ကို cancel လုပ်လိုက်ပါပြီ။",
     "confirm_button":   "✅ Confirm",
     "cancel_button":    "❌ Cancel",
+    "owner_only_action_denied": "❌ ဤလုပ်ဆောင်ချက်ကို Bot Owner သာ အသုံးပြုနိုင်ပါသည်။",
     "plus_fmt":          "+{count}",
     "digit_emoji":       "",   # empty = use plain digits
     # Plus / minus reply messages
@@ -2169,7 +2171,12 @@ async def cleardata_callback(update: Update, context: CallbackContext) -> None:
 
 async def admin_clearall_command(update: Update, context: CallbackContext) -> None:
     user = update.effective_user
-    if user.id not in ADMIN_IDS:
+    if not user or user.id not in ADMIN_IDS:
+        message = _update_message(update)
+        if message:
+            await _reply_custom(
+                message, context.application.bot_data, "owner_only_action_denied"
+            )
         return
     if update.effective_chat.type != 'private':
         await update.message.reply_text("❌ Bot PM ထဲတွင်သာ အသုံးပြုနိုင်သည်။")
@@ -2214,7 +2221,12 @@ async def admin_clearall_command(update: Update, context: CallbackContext) -> No
 
 async def admin_resetplusall_command(update: Update, context: CallbackContext) -> None:
     user = update.effective_user
-    if user.id not in ADMIN_IDS:
+    if not user or user.id not in ADMIN_IDS:
+        message = _update_message(update)
+        if message:
+            await _reply_custom(
+                message, context.application.bot_data, "owner_only_action_denied"
+            )
         return
     if update.effective_chat.type != 'private':
         await update.message.reply_text("❌ Bot PM ထဲတွင်သာ အသုံးပြုနိုင်သည်။")
