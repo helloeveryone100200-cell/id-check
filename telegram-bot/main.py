@@ -108,6 +108,8 @@ CUSTOM_MSG_LABELS = {
     "schedule_save_failed": "❌ Schedule database save failure message",
     "schedule_create_failed": "❌ Schedule creation failure message",
     "schedule_saved": "✅ Schedule created confirmation ({fire_label}, {message}, {group_name}, {schedule_id})",
+    "schedule_once_fire_label": "One-time firing date/time display ({datetime})",
+    "schedule_daily_fire_label": "Daily firing time display ({time})",
     "schedule_type_once_label": "One-time schedule type name",
     "schedule_type_daily_label": "Daily schedule type name",
     "schedule_remove_prompt": "🗑️ Select schedule to remove prompt",
@@ -207,6 +209,8 @@ DEFAULT_MSGS: dict = {
     "schedule_save_failed": "❌ MongoDB တွင် schedule သိမ်းဆည်း၍ မရပါ။ ခဏအကြာတွင် ထပ်စမ်းပါ။",
     "schedule_create_failed": "❌ Schedule ကို စတင်သတ်မှတ်၍ မရပါ။ ခဏအကြာတွင် ထပ်စမ်းပါ။",
     "schedule_saved": "✅ Schedule ထည့်ပြီးပါပြီ!\n\n⏰ {fire_label}\n💬 {message}\n👥 {group_name}\n🆔 {schedule_id}",
+    "schedule_once_fire_label": "{datetime} (Yangon)",
+    "schedule_daily_fire_label": "နေ့တိုင်း {time} (Yangon)",
     "schedule_type_once_label": "One-time",
     "schedule_type_daily_label": "Daily",
     "schedule_remove_prompt": "🗑️ ဤ Group အတွက် ဖျက်လိုသော Schedule ကို ရွေးပါ။",
@@ -3615,7 +3619,11 @@ async def schedule_select_type(update: Update, context: CallbackContext) -> int:
                 name=sched_id,
                 data={"sched_id": sched_id},
             )
-            fire_label = target_dt.strftime("%Y-%m-%d %H:%M") + " (Yangon)"
+            fire_label = get_msg(
+                bot_data,
+                "schedule_once_fire_label",
+                datetime=target_dt.strftime("%Y-%m-%d %H:%M"),
+            )
         else:
             context.application.job_queue.run_daily(
                 scheduled_message_job,
@@ -3623,7 +3631,11 @@ async def schedule_select_type(update: Update, context: CallbackContext) -> int:
                 name=sched_id,
                 data={"sched_id": sched_id},
             )
-            fire_label = f"နေ့တိုင်း {int(hour):02d}:{int(minute):02d} (Yangon)"
+            fire_label = get_msg(
+                bot_data,
+                "schedule_daily_fire_label",
+                time=f"{int(hour):02d}:{int(minute):02d}",
+            )
     except Exception as exc:
         logging.exception("Could not schedule job %s: %s", sched_id, exc)
         schedules.pop(sched_id, None)
