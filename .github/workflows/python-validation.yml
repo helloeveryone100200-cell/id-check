@@ -39,22 +39,139 @@ jobs:
           python - <<'PY'
           import asyncio
           import ast
+          import os
           import sys
+          from datetime import datetime, timezone
           from pathlib import Path
           from types import SimpleNamespace
+          from telegram import Chat, Message, MessageEntity, Update, User
 
           sys.path.insert(0, "telegram-bot")
           import main as bot
 
           # Register all handlers without making a Telegram API request or
-          # starting polling. This catches invalid filters, callback patterns,
-          # and handler configuration errors before a Render deployment.
+          # starting polling. Capture the built Application to test dispatch.
+          registered_applications = []
           original_run_polling = bot.Application.run_polling
           try:
-              bot.Application.run_polling = lambda self, *args, **kwargs: None
+              def capture_application(application, *args, **kwargs):
+                  registered_applications.append(application)
+              bot.Application.run_polling = capture_application
               bot.main()
           finally:
               bot.Application.run_polling = original_run_polling
+
+          assert len(registered_applications) == 1
+          registered_app = registered_applications[0]
+          setmsg_handler = next(
+              handler
+              for handler in registered_app.handlers.get(0, [])
+              if isinstance(handler, bot.ConversationHandler)
+              and any(
+                  isinstance(entry, bot.CommandHandler)
+                  and "setmsg" in entry.commands
+                  for entry in handler.entry_points
+              )
+          )
+          # The /setmsg conversation gets first priority in group 0; the
+          # persistent-keyboard handler remains in group -1 by design.
+          assert registered_app.handlers[0][0] is setmsg_handler
+          command_update = Update(
+              update_id=987654,
+              message=Message(
+                  message_id=1,
+                  date=datetime.now(timezone.utc),
+                  chat=Chat(id=123456, type="private"),
+                  from_user=User(id=123456, first_name="Owner", is_bot=False),
+                  text="/setmsg",
+                  entities=[MessageEntity(
+                      type=MessageEntity.BOT_COMMAND, offset=0, length=7
+                  )],
+              ),
+          )
+          # CommandHandler only needs a bot username for this synthetic update.
+          command_update.message._bot = SimpleNamespace(username="smoke_test_bot")
+          assert setmsg_handler.check_update(command_update) is not None
+
+          # The owner must receive /setmsg in their private command menu even
+          # when OWNER_ID is not duplicated in ADMIN_IDS.
+          original_admin_ids = bot.ADMIN_IDS
+          previous_owner_id = os.environ.get("OWNER_ID")
+          try:
+              bot.ADMIN_IDS = [111]
+              os.environ["OWNER_ID"] = "222"
+              admin_command_names = {
+                  command.command for command in bot._admin_bot_commands()
+              }
+              assert "setmsg" in admin_command_names
+              assert bot._admin_command_menu_ids() == [111, 222]
+          finally:
+              bot.ADMIN_IDS = original_admin_ids
+              if previous_owner_id is None:
+                  os.environ.pop("OWNER_ID", None)
+              else:
+                  os.environ["OWNER_ID"] = previous_owner_id
+
+          # Prove that /setmsg responds with the available editor options and
+          # includes the schedule-management message entry.
+          class FakeMessage:
+              def __init__(self):
+                  self.sent = []
+                  self.reject_custom_icon = True
+              async def reply_text(self, text, **kwargs):
+                  markup = kwargs.get("reply_markup")
+                  buttons = [
+                      button for row in getattr(markup, "inline_keyboard", [])
+                      for button in row
+                  ]
+                  if self.reject_custom_icon and any(
+                      getattr(button, "icon_custom_emoji_id", None)
+                      for button in buttons
+                  ):
+                      self.reject_custom_icon = False
+                      raise bot.BadRequest("custom emoji buttons are unavailable")
+                  self.sent.append((text, kwargs))
+
+          fake_message = FakeMessage()
+          setmsg_owner_id = os.environ.get("OWNER_ID")
+          original_get_custom_emoji_id = bot._get_first_custom_emoji_id
+          try:
+              os.environ["OWNER_ID"] = "123456"
+              bot._get_first_custom_emoji_id = lambda *args: "987654"
+              fake_update = SimpleNamespace(
+                  message=fake_message,
+                  effective_user=SimpleNamespace(id=123456),
+                  effective_chat=SimpleNamespace(type="private"),
+              )
+              fake_context = SimpleNamespace(
+                  application=SimpleNamespace(bot_data={}),
+                  user_data={},
+              )
+              result = asyncio.run(bot.setmsg_start(fake_update, fake_context))
+              assert result == bot.SETMSG_SELECT
+              assert len(fake_message.sent) == 1
+              markup = fake_message.sent[0][1]["reply_markup"]
+              visible_buttons = [
+                  button
+                  for row in markup.inline_keyboard
+                  for button in row
+              ]
+              assert any(
+                  button.callback_data == "setmsg_schedule_management_message"
+                  and button.text == bot.CUSTOM_MSG_LABELS["schedule_management_message"]
+                  for button in visible_buttons
+              )
+              assert not any(
+                  getattr(button, "icon_custom_emoji_id", None)
+                  for button in visible_buttons
+              )
+              assert fake_message.reject_custom_icon is False
+          finally:
+              bot._get_first_custom_emoji_id = original_get_custom_emoji_id
+              if setmsg_owner_id is None:
+                  os.environ.pop("OWNER_ID", None)
+              else:
+                  os.environ["OWNER_ID"] = setmsg_owner_id
 
           private_buttons = [
               button.text
