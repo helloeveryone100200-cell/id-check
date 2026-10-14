@@ -30,6 +30,7 @@ from telegram import (
     ReactionTypeEmoji, ReactionTypeCustomEmoji
 )
 from telegram.ext import CallbackContext
+from telegram.error import BadRequest
 from web_server import keep_alive
 
 logging.basicConfig(
@@ -868,6 +869,8 @@ async def setmsg_start(update: Update, context: CallbackContext) -> int:
         return ConversationHandler.END
 
     keyboard = []
+    plain_keyboard = []
+    has_custom_emoji_icons = False
     labels = (
         CUSTOM_MSG_LABELS.items()
         if _is_owner(user.id)
@@ -878,22 +881,44 @@ async def setmsg_start(update: Update, context: CallbackContext) -> int:
             context.application.bot_data, key
         )
         button_label = label
-        button_kwargs = {"callback_data": f"setmsg_{key}"}
+        callback_data = f"setmsg_{key}"
+        button_kwargs = {"callback_data": callback_data}
 
-        # Telegram renders custom emoji in buttons through the dedicated
-        # icon field, not through MessageEntity metadata in button text.
-        # Keep the old checkmark label when no custom emoji is configured.
+        # Retain custom-emoji decoration where Telegram permits it, but build
+        # a plain-text fallback because Telegram restricts emoji icons on bot
+        # buttons depending on the bot owner's Premium/username eligibility.
         if custom_emoji_id:
             button_kwargs["icon_custom_emoji_id"] = custom_emoji_id
+            has_custom_emoji_icons = True
             if button_label.startswith("✅ "):
                 button_label = button_label[2:]
 
         keyboard.append([InlineKeyboardButton(button_label, **button_kwargs)])
-    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="setmsg_cancel")])
-    await update.message.reply_text(
-        "✏️ ပြောင်းလဲလိုသော message ကို ရွေးပါ:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+        plain_keyboard.append([
+            InlineKeyboardButton(button_label, callback_data=callback_data)
+        ])
+
+    cancel_button = InlineKeyboardButton("❌ Cancel", callback_data="setmsg_cancel")
+    keyboard.append([cancel_button])
+    plain_keyboard.append([cancel_button])
+    prompt = "✏️ ပြောင်းလဲလိုသော message ကို ရွေးပါ:"
+    try:
+        await update.message.reply_text(
+            prompt,
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+    except BadRequest as exc:
+        if not has_custom_emoji_icons:
+            raise
+        logging.warning(
+            "Telegram rejected custom emoji icons in /setmsg menu; "
+            "retrying without icons: %s",
+            exc,
+        )
+        await update.message.reply_text(
+            prompt,
+            reply_markup=InlineKeyboardMarkup(plain_keyboard),
+        )
     return SETMSG_SELECT
 
 
