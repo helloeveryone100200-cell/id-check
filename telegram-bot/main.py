@@ -608,6 +608,41 @@ def get_msg(bot_data: dict, key: str, **fmt) -> str:
     return _safe_substitute(text, **fmt) if fmt else text
 
 
+def _public_bot_commands() -> list[BotCommand]:
+    return [
+        BotCommand("start", "Bot စတင် / Menu ဖွင့်"),
+        BotCommand("menu", "Main menu"),
+        BotCommand("showdata", "ယနေ့ data ကြည့်"),
+        BotCommand("cleardata", "ယနေ့ data ဖျက်"),
+        BotCommand("form", "Report template"),
+        BotCommand("total_plus", "Plus counter ကြည့်"),
+        BotCommand("reset_plus", "Plus counter ရှင်း"),
+        BotCommand("feedback", "Admin ထံ မှတ်ချက်"),
+    ]
+
+
+def _group_bot_commands(bot_data: dict) -> list[BotCommand]:
+    def description(key: str) -> str:
+        value = " ".join(get_msg(bot_data, key).split())[:256]
+        return value or DEFAULT_MSGS[key]
+
+    return _public_bot_commands() + [
+        BotCommand("setschedule", description("schedule_set_command_description")),
+        BotCommand("removeschedule", description("schedule_remove_command_description")),
+        BotCommand("listschedules", description("schedule_list_command_description")),
+    ]
+
+
+async def _refresh_group_schedule_commands(bot, bot_data: dict) -> None:
+    try:
+        await bot.set_my_commands(
+            _group_bot_commands(bot_data),
+            scope=BotCommandScopeAllGroupChats(),
+        )
+    except Exception as exc:
+        logging.warning("Could not update group schedule command menu: %s", exc)
+
+
 def _confirmation_button(bot_data: dict, key: str, callback_data: str,
                          style: str) -> InlineKeyboardButton:
     """Build a customisable confirmation button with an optional animated icon.
@@ -978,6 +1013,14 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
         if context.application.persistence:
             await context.application.persistence.flush()
         save_bot_config_to_mongo(context.application.bot_data)
+        if key in {
+            "schedule_set_command_description",
+            "schedule_remove_command_description",
+            "schedule_list_command_description",
+        }:
+            await _refresh_group_schedule_commands(
+                context.bot, context.application.bot_data
+            )
         label = CUSTOM_MSG_LABELS.get(key, key)
         await msg.reply_text(
             f"✅ <b>{label}</b> — default သို့ ပြန်သတ်မှတ်ပြီးပါပြီ။",
@@ -1034,6 +1077,14 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
     if context.application.persistence:
         await context.application.persistence.flush()
     save_bot_config_to_mongo(context.application.bot_data)
+    if key in {
+        "schedule_set_command_description",
+        "schedule_remove_command_description",
+        "schedule_list_command_description",
+    }:
+        await _refresh_group_schedule_commands(
+            context.bot, context.application.bot_data
+        )
 
     label = CUSTOM_MSG_LABELS.get(key, key)
     emoji_note = " ✨ (Premium emoji သိမ်းဆည်းပြီး)" if entities_raw else ""
@@ -4464,25 +4515,7 @@ async def post_init(application: Application) -> None:
         time=time(hour=12, minute=0, second=0, tzinfo=tz),
         name='auto_clear_daily'
     )
-    public_commands = [
-        BotCommand("start",          "Bot စတင် / Menu ဖွင့်"),
-        BotCommand("menu",           "Main menu"),
-        BotCommand("showdata",       "ယနေ့ data ကြည့်"),
-        BotCommand("cleardata",      "ယနေ့ data ဖျက်"),
-        BotCommand("form",           "Report template"),
-        BotCommand("total_plus",     "Plus counter ကြည့်"),
-        BotCommand("reset_plus",     "Plus counter ရှင်း"),
-        BotCommand("feedback",       "Admin ထံ မှတ်ချက်"),
-    ]
-    def _schedule_command_description(key: str) -> str:
-        description = " ".join(get_msg(application.bot_data, key).split())[:256]
-        return description or DEFAULT_MSGS[key]
-
-    group_commands = public_commands + [
-        BotCommand("setschedule", _schedule_command_description("schedule_set_command_description")),
-        BotCommand("removeschedule", _schedule_command_description("schedule_remove_command_description")),
-        BotCommand("listschedules", _schedule_command_description("schedule_list_command_description")),
-    ]
+    public_commands = _public_bot_commands()
     admin_commands = public_commands + [
         BotCommand("stats",          "Bot stats (Admin)"),
         BotCommand("listusers",      "User list (Admin)"),
@@ -4494,13 +4527,9 @@ async def post_init(application: Application) -> None:
 
     # Schedule commands are listed in group chats only, never in private chats.
     await application.bot.set_my_commands(public_commands)
-    try:
-        await application.bot.set_my_commands(
-            group_commands,
-            scope=BotCommandScopeAllGroupChats(),
-        )
-    except Exception as exc:
-        logging.warning("Could not set group schedule command menu: %s", exc)
+    await _refresh_group_schedule_commands(
+        application.bot, application.bot_data
+    )
 
     # Each configured admin keeps the admin-only commands in their private menu.
     for admin_id in ADMIN_IDS:
