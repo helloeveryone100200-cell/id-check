@@ -41,6 +41,7 @@ jobs:
           import ast
           import sys
           from pathlib import Path
+          from types import SimpleNamespace
 
           sys.path.insert(0, "telegram-bot")
           import main as bot
@@ -101,6 +102,73 @@ jobs:
           )
           assert bot._consume_schedule_pm_token(expired_link, 111) is None
           print("Schedule PM token expiry/one-time/user/group/action checks passed.")
+
+          # A stale Delete callback from a group must redirect to PM, never mutate
+          # the schedule or write to MongoDB from that group message.
+          class FakeQuery:
+              def __init__(self):
+                  self.data = "sched_remove_delete_abc123"
+                  self.answers = []
+                  self.message = SimpleNamespace(chat_id=-222)
+
+              async def answer(self, **kwargs):
+                  self.answers.append(kwargs)
+
+          group_schedule = {
+              "hour": 9, "minute": 30, "message": "hello",
+              "group_ids": [-222], "type": "daily",
+          }
+          fake_query = FakeQuery()
+          fake_update = SimpleNamespace(
+              callback_query=fake_query,
+              effective_chat=SimpleNamespace(id=-222, type="supergroup"),
+              effective_user=SimpleNamespace(id=111),
+              effective_message=None,
+              message=None,
+          )
+          fake_bot_data = {"schedules": {"abc123": group_schedule}}
+          fake_context = SimpleNamespace(
+              application=SimpleNamespace(bot_data=fake_bot_data),
+              user_data={},
+              bot=SimpleNamespace(),
+          )
+          original_is_admin = bot._is_group_schedule_admin
+          original_deep_link = bot._schedule_pm_deep_link
+          original_delete = bot.delete_schedule_from_mongo
+          original_save = bot.save_schedule_to_mongo
+          persistence_writes = []
+
+          async def allow_fake_admin(context, user_id, group_id):
+              return user_id == 111 and group_id == -222
+
+          async def fake_deep_link(context, parameter):
+              return f"https://t.me/test_bot?start={parameter}"
+
+          def track_delete(sched_id):
+              persistence_writes.append(("delete", sched_id))
+              return True
+
+          def track_save(sched_id, schedule):
+              persistence_writes.append(("save", sched_id))
+              return True
+
+          try:
+              bot._is_group_schedule_admin = allow_fake_admin
+              bot._schedule_pm_deep_link = fake_deep_link
+              bot.delete_schedule_from_mongo = track_delete
+              bot.save_schedule_to_mongo = track_save
+              asyncio.run(bot.schedule_remove_callback(fake_update, fake_context))
+          finally:
+              bot._is_group_schedule_admin = original_is_admin
+              bot._schedule_pm_deep_link = original_deep_link
+              bot.delete_schedule_from_mongo = original_delete
+              bot.save_schedule_to_mongo = original_save
+
+          assert fake_query.answers
+          assert fake_query.answers[0]["url"].startswith("https://t.me/test_bot?start=sched_")
+          assert persistence_writes == []
+          assert fake_bot_data["schedules"]["abc123"]["group_ids"] == [-222]
+          print("Legacy group Delete callback PM-redirect/no-mutation regression test passed.")
 
           # Regression: the custom schedule message contains a {message} placeholder,
           # which must not collide with _reply_custom's target Telegram message argument.
