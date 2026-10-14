@@ -3730,6 +3730,7 @@ async def schedule_start_entry(
             await _reply_custom(message, bot_data, "schedule_pm_link_invalid")
         return ConversationHandler.END
 
+    _clear_schedule_pm_session(context)
     group_id = int(payload["group_id"])
     context.user_data["schedule_pm_group_id"] = group_id
     context.user_data["schedule_pm_action"] = payload["action"]
@@ -3815,22 +3816,23 @@ async def schedule_select_type(update: Update, context: CallbackContext) -> int:
 
     if query.data == "sched_cancel":
         await _edit_custom(query, bot_data, "schedule_cancelled")
-        for key in (
-            "new_schedule_group_id", "new_schedule_hour", "new_schedule_minute",
-            "new_schedule_message", "new_schedule_type",
-        ):
-            context.user_data.pop(key, None)
+        _clear_schedule_pm_session(context)
         return ConversationHandler.END
 
     if query.data not in {"sched_type_once", "sched_type_daily"}:
         await _edit_custom(query, bot_data, "schedule_missing_data")
+        _clear_schedule_pm_session(context)
         return ConversationHandler.END
 
-    if not await _require_group_schedule_admin(update, context):
+    if (
+        context.user_data.get("schedule_pm_action") != "set"
+        or not await _require_group_schedule_admin(update, context)
+    ):
         try:
             await query.edit_message_reply_markup(reply_markup=None)
         except Exception:
             pass
+        _clear_schedule_pm_session(context)
         return ConversationHandler.END
 
     group_id = context.user_data.get("new_schedule_group_id")
@@ -3850,6 +3852,7 @@ async def schedule_select_type(update: Update, context: CallbackContext) -> int:
     message_text = context.user_data.pop("new_schedule_message", None)
     if hour is None or minute is None or not message_text:
         await _edit_custom(query, bot_data, "schedule_missing_data")
+        _clear_schedule_pm_session(context)
         return ConversationHandler.END
 
     schedule_type = "once" if query.data == "sched_type_once" else "daily"
@@ -3905,6 +3908,7 @@ async def schedule_select_type(update: Update, context: CallbackContext) -> int:
         logging.exception("Could not schedule job %s: %s", sched_id, exc)
         schedules.pop(sched_id, None)
         await _edit_custom(query, bot_data, "schedule_create_failed")
+        _clear_schedule_pm_session(context)
         return ConversationHandler.END
 
     mongo_result = save_schedule_to_mongo(sched_id, schedule)
@@ -3922,6 +3926,7 @@ async def schedule_select_type(update: Update, context: CallbackContext) -> int:
         if context.application.persistence:
             await context.application.persistence.flush()
         await _edit_custom(query, bot_data, "schedule_save_failed")
+        _clear_schedule_pm_session(context)
         return ConversationHandler.END
 
     if context.application.persistence:
@@ -4158,7 +4163,11 @@ async def schedule_remove_callback(update: Update, context: CallbackContext) -> 
     if not chat or chat.type != "private":
         return
     group_id = context.user_data.get("schedule_pm_group_id")
-    if group_id is None or not await _require_group_schedule_admin(update, context):
+    if (
+        group_id is None
+        or context.user_data.get("schedule_pm_action") != "remove"
+        or not await _require_group_schedule_admin(update, context)
+    ):
         _clear_schedule_pm_session(context)
         return
     group_id = int(group_id)
