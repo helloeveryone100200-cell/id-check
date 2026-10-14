@@ -79,6 +79,7 @@ CUSTOM_MSG_LABELS = {
     "cleardata_ok":     "✅ /cleardata — Data deleted message",
     "cleardata_empty":  "📭 /cleardata — No data message",
     "cleardata_confirm":"⚠️ /cleardata — Confirmation prompt ({today} သုံးနိုင်)",
+    "cleardata_cancelled":"❌ /cleardata — Cancelled confirmation message",
     "showdata_empty":   "📭 /showdata — No data message",
     "showdata_footer":  "💬 /showdata — Footer hint",
     "total_plus_empty": "📊 /total_plus — No data message",
@@ -86,6 +87,7 @@ CUSTOM_MSG_LABELS = {
     "reset_plus_empty": "📊 /reset_plus — No counter message",
     "reset_plus_ok":    "✅ /reset_plus — Reset success message",
     "reset_plus_confirm":"⚠️ /reset_plus — Confirmation prompt ({count} သုံးနိုင်)",
+    "reset_plus_cancelled":"❌ /reset_plus — Cancelled confirmation message",
     "confirm_button":   "✅ Confirmation — Confirm button text",
     "cancel_button":    "❌ Confirmation — Cancel button text",
     "plus_reaction":    "⚙️ Plus counter reaction",
@@ -138,6 +140,7 @@ DEFAULT_MSGS: dict = {
     "cleardata_ok":      "✅ Data deleted for today ({today}).\n✅ Plus counter reset ပြုလုပ်ပြီးပါပြီ။",
     "cleardata_empty":   "No data found for today ({today}).",
     "cleardata_confirm": "⚠️ <b>ယနေ့ ({today}) data နှင့် Plus counter ကို ရှင်းလင်းမည်။</b>\n\nဆက်လုပ်မည်လား?",
+    "cleardata_cancelled": "❌ Clear data လုပ်ဆောင်ချက်ကို cancel လုပ်လိုက်ပါပြီ။",
     "showdata_empty":    "No data collected yet for today ({today}) in this chat.",
     "showdata_footer":   "{mention} report ပြင်ဆင်ပြီးပါက /cleardata နှိပ်ပါ။",
     "total_plus_empty":  "📊 ဤ chat တွင် (+) reply မရှိသေးပါ။",
@@ -145,6 +148,7 @@ DEFAULT_MSGS: dict = {
     "reset_plus_empty":  "📊 ဤ chat တွင် ရှင်လင်းစရာ Plus counter မရှိသေးပါ။",
     "reset_plus_ok":     "✅ Plus counter reset ပြုလုပ်ပြီးပါပြီ။\n🗑️ ဤ chat ရှိ အဖွဲ့ဝင် {count} ဦး၏ ကောင်တာများ ပြန်လည်သုညမှ စတင်ပြီ။",
     "reset_plus_confirm":"⚠️ ဤ chat ၏ Plus counter ({count} ဦး) ကို reset လုပ်မည်။\n\nဆက်လုပ်မည်လား?",
+    "reset_plus_cancelled":"❌ Plus counter reset လုပ်ဆောင်ချက်ကို cancel လုပ်လိုက်ပါပြီ။",
     "confirm_button":   "✅ Confirm",
     "cancel_button":    "❌ Cancel",
     "plus_fmt":          "+{count}",
@@ -2127,7 +2131,7 @@ async def cleardata_callback(update: Update, context: CallbackContext) -> None:
     await query.answer()
 
     if query.data == "cleardata_cancel":
-        await query.edit_message_text("❌ Clear data လုပ်ဆောင်ချက်ကို cancel လုပ်လိုက်ပါပြီ။")
+        await _edit_custom(query, context.application.bot_data, "cleardata_cancelled")
         return
 
     if query.data != "cleardata_confirm" or not query.message:
@@ -3776,7 +3780,7 @@ async def resetplus_callback(update: Update, context: CallbackContext) -> None:
     await query.answer()
 
     if query.data == "resetplus_cancel":
-        await query.edit_message_text("❌ Plus counter reset လုပ်ဆောင်ချက်ကို cancel လုပ်လိုက်ပါပြီ။")
+        await _edit_custom(query, context.application.bot_data, "reset_plus_cancelled")
         return
 
     if query.data != "resetplus_confirm" or not query.message:
