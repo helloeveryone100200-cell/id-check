@@ -4474,10 +4474,14 @@ async def post_init(application: Application) -> None:
         BotCommand("reset_plus",     "Plus counter ရှင်း"),
         BotCommand("feedback",       "Admin ထံ မှတ်ချက်"),
     ]
+    def _schedule_command_description(key: str) -> str:
+        description = " ".join(get_msg(application.bot_data, key).split())[:256]
+        return description or DEFAULT_MSGS[key]
+
     group_commands = public_commands + [
-        BotCommand("setschedule",   get_msg(application.bot_data, "schedule_set_command_description")),
-        BotCommand("removeschedule", get_msg(application.bot_data, "schedule_remove_command_description")),
-        BotCommand("listschedules", get_msg(application.bot_data, "schedule_list_command_description")),
+        BotCommand("setschedule", _schedule_command_description("schedule_set_command_description")),
+        BotCommand("removeschedule", _schedule_command_description("schedule_remove_command_description")),
+        BotCommand("listschedules", _schedule_command_description("schedule_list_command_description")),
     ]
     admin_commands = public_commands + [
         BotCommand("stats",          "Bot stats (Admin)"),
