@@ -66,13 +66,34 @@ jobs:
               for button in row
           ]
 
+          assert "Schedule" not in private_buttons
           assert "Set Schedule" not in private_buttons
           assert "Remove Schedule" not in private_buttons
-          assert "Set Schedule" in group_buttons
-          assert "Remove Schedule" in group_buttons
+          assert "Schedule" in group_buttons
+          assert "Set Schedule" not in group_buttons
+          assert "Remove Schedule" not in group_buttons
           assert "schedule_admin_only" in bot.DEFAULT_MSGS
           assert "schedule_admin_only" in bot.CUSTOM_MSG_LABELS
-          print("Handler registration and group/private schedule keyboard checks passed.")
+          assert "schedule_management_message" in bot.DEFAULT_MSGS
+          assert bot.get_msg(
+              {}, "schedule_management_message"
+          ) == "📅 Schedule Management\nManage this group's schedules privately with the bot."
+          print("Handler registration and Schedule-only group keyboard checks passed.")
+
+          # Schedule PM links are short, one-use, user-bound, and group/action scoped.
+          set_link = bot._create_schedule_pm_token(111, -222, "set")
+          assert len(set_link) <= 64 and set_link.startswith("sched_")
+          assert bot._consume_schedule_pm_token(set_link, 999) is None
+          set_payload = bot._consume_schedule_pm_token(set_link, 111)
+          assert set_payload["user_id"] == 111
+          assert set_payload["group_id"] == -222
+          assert set_payload["action"] == "set"
+          assert bot._consume_schedule_pm_token(set_link, 111) is None
+          remove_link = bot._create_schedule_pm_token(111, -333, "remove")
+          remove_payload = bot._consume_schedule_pm_token(remove_link, 111)
+          assert remove_payload["group_id"] == -333
+          assert remove_payload["action"] == "remove"
+          print("Schedule PM token expiry/one-time/user/group/action checks passed.")
 
           # Regression: the custom schedule message contains a {message} placeholder,
           # which must not collide with _reply_custom's target Telegram message argument.
