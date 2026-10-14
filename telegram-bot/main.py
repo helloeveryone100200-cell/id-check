@@ -3437,11 +3437,11 @@ async def _require_group_schedule_admin(
         return False
 
     try:
-        member = await context.bot.get_chat_member(chat_id=chat.id, user_id=user.id)
-        allowed = member.status in {"creator", "administrator"}
+        admins = await context.bot.get_chat_administrators(chat_id=chat.id)
+        allowed = any(admin.user.id == user.id for admin in admins)
     except Exception as exc:
         logging.warning(
-            "Could not verify schedule permission for user %s in group %s: %s",
+            "Could not verify group admins for schedule action by user %s in group %s: %s",
             user.id, chat.id, exc
         )
         allowed = False
