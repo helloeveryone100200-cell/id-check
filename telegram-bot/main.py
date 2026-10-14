@@ -3638,7 +3638,7 @@ async def _show_group_schedule_picker(
     ]
 
     if not group_schedules:
-        context.user_data.pop("schedule_remove_menu", None)
+        context.chat_data.pop("schedule_remove_menu", None)
         await _reply_custom(
             message, bot_data, "schedule_remove_none",
             reply_markup=_main_reply_keyboard(bot_data, include_schedule=True),
@@ -3656,7 +3656,7 @@ async def _show_group_schedule_picker(
 
     cancel_label = _schedule_keyboard_label(bot_data, "schedule_remove_cancel_button")
     keyboard.append([KeyboardButton(cancel_label)])
-    context.user_data["schedule_remove_menu"] = {
+    context.chat_data["schedule_remove_menu"] = {
         "chat_id": chat.id,
         "options": options,
         "cancel_label": cancel_label,
@@ -3690,16 +3690,16 @@ async def schedule_remove_text_handler(
     text = message.text.strip()
     bot_data = context.application.bot_data
     if text in _schedule_keyboard_labels(bot_data, "schedule_remove_button"):
-        context.user_data.pop("schedule_remove_menu", None)
+        context.chat_data.pop("schedule_remove_menu", None)
         await _show_group_schedule_picker(update, context)
         return
 
-    menu = context.user_data.get("schedule_remove_menu", {})
+    menu = context.chat_data.get("schedule_remove_menu", {})
     if str(menu.get("chat_id")) != str(update.effective_chat.id):
         return
 
     if text == menu.get("cancel_label"):
-        context.user_data.pop("schedule_remove_menu", None)
+        context.chat_data.pop("schedule_remove_menu", None)
         await _reply_custom(
             message,
             bot_data,
@@ -3714,7 +3714,7 @@ async def schedule_remove_text_handler(
 
     schedule = bot_data.get("schedules", {}).get(sched_id)
     if not schedule or not _schedule_belongs_to_group(schedule, update.effective_chat.id):
-        context.user_data.pop("schedule_remove_menu", None)
+        context.chat_data.pop("schedule_remove_menu", None)
         await _reply_custom(
             message,
             bot_data,
@@ -3763,7 +3763,7 @@ async def schedule_remove_callback(update: Update, context: CallbackContext) -> 
     chat = update.effective_chat
     data = query.data
     if data == "sched_remove_cancel":
-        context.user_data.pop("schedule_remove_menu", None)
+        context.chat_data.pop("schedule_remove_menu", None)
         await _edit_custom(query, bot_data, "schedule_remove_cancelled")
         await query.message.reply_text(
             get_msg(bot_data, "schedule_menu_restored"),
@@ -3779,7 +3779,7 @@ async def schedule_remove_callback(update: Update, context: CallbackContext) -> 
     schedules = bot_data.get("schedules", {})
     schedule = schedules.get(sched_id)
     if not schedule or not _schedule_belongs_to_group(schedule, chat.id):
-        context.user_data.pop("schedule_remove_menu", None)
+        context.chat_data.pop("schedule_remove_menu", None)
         await _edit_custom(query, bot_data, "schedule_not_found")
         await query.message.reply_text(
             get_msg(bot_data, "schedule_menu_restored"),
@@ -3815,7 +3815,7 @@ async def schedule_remove_callback(update: Update, context: CallbackContext) -> 
     if context.application.persistence:
         await context.application.persistence.flush()
 
-    context.user_data.pop("schedule_remove_menu", None)
+    context.chat_data.pop("schedule_remove_menu", None)
     await _edit_custom(
         query, bot_data, "schedule_delete_success", id=sched_id, time=schedule_time
     )
@@ -4607,8 +4607,8 @@ def main():
         text = message.text.strip()
         if text in _schedule_keyboard_labels(application.bot_data, "schedule_remove_button"):
             return True
-        user_state = application.user_data.get(message.from_user.id, {})
-        menu = user_state.get("schedule_remove_menu", {})
+        chat_state = application.chat_data.get(message.chat.id, {})
+        menu = chat_state.get("schedule_remove_menu", {})
         if str(menu.get("chat_id")) != str(message.chat.id):
             return False
         return text == menu.get("cancel_label") or text in menu.get("options", {})
