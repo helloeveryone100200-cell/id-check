@@ -4666,10 +4666,6 @@ def main():
     schedule_remove_action_filter = (
         _ScheduleRemoveActionFilter() & filters.ChatType.GROUPS
     )
-    application.add_handler(MessageHandler(
-        schedule_remove_action_filter,
-        schedule_remove_text_handler,
-    ))
 
     application.add_handler(MessageHandler(
         filters.TEXT & filters.Regex(
@@ -4838,6 +4834,12 @@ def main():
         allow_reentry=True,
     )
     application.add_handler(schedule_handler)
+    # Give an active Set Schedule conversation first refusal on text input. This
+    # prevents a schedule message equal to a menu label from being intercepted.
+    application.add_handler(MessageHandler(
+        schedule_remove_action_filter,
+        schedule_remove_text_handler,
+    ))
     application.add_handler(CallbackQueryHandler(
         schedule_remove_callback,
         pattern=r'^sched_remove_(?:delete_[A-Za-z0-9_-]+|cancel)$',
