@@ -93,6 +93,13 @@ jobs:
           remove_payload = bot._consume_schedule_pm_token(remove_link, 111)
           assert remove_payload["group_id"] == -333
           assert remove_payload["action"] == "remove"
+
+          expired_link = bot._create_schedule_pm_token(111, -444, "set")
+          expired_token = expired_link[len("sched_"):]
+          bot._SCHEDULE_PM_TOKENS[expired_token]["expires_at"] = (
+              bot.datetime.now(bot.pytz.UTC).timestamp() - 1
+          )
+          assert bot._consume_schedule_pm_token(expired_link, 111) is None
           print("Schedule PM token expiry/one-time/user/group/action checks passed.")
 
           # Regression: the custom schedule message contains a {message} placeholder,
