@@ -4,6 +4,7 @@ import io
 import math
 import logging
 import asyncio
+import secrets
 from html import escape as html_escape
 import threading
 import pytz
@@ -91,10 +92,14 @@ CUSTOM_MSG_LABELS = {
     "cancel_button":    "❌ Confirmation — Cancel button text",
     "owner_only_action_denied": "🔒 Owner-only actions — Access denied message",
     # Group-specific schedule system
-    "schedule_set_button": "⏰ Set Schedule — Group reply-keyboard button",
-    "schedule_remove_button": "🗑️ Remove Schedule — Group reply-keyboard button",
+    "schedule_menu_button": "📅 Schedule — Group reply-keyboard button",
+    "schedule_management_message": "📅 Schedule Management — Group menu message",
+    "schedule_open_pm_prompt": "Open the requested schedule action in Bot PM",
+    "schedule_pm_link_invalid": "Invalid or expired schedule PM link",
+    "schedule_set_button": "⏰ Set Schedule — Inline keyboard button",
+    "schedule_remove_button": "🗑️ Remove Schedule — Inline keyboard button",
     "schedule_button_invalid": "❌ Schedule button label must be one line with 1–64 characters",
-    "schedule_button_duplicate": "❌ Set Schedule နှင့် Remove Schedule button အမည်များ မတူညီရပါ။",
+    "schedule_button_duplicate": "❌ Schedule, Set Schedule နှင့် Remove Schedule button အမည်များ မတူညီရပါ။",
     "schedule_group_only": "🔒 Schedule unavailable in private chat",
     "schedule_admin_only": "🔒 Schedule permission denied — Group Owner/Admin only",
     "schedule_time_prompt": "⏰ Schedule time prompt (HH:MM)",
@@ -194,10 +199,14 @@ DEFAULT_MSGS: dict = {
     "cancel_button":    "❌ Cancel",
     "owner_only_action_denied": "❌ ဤလုပ်ဆောင်ချက်ကို Bot Owner သာ အသုံးပြုနိုင်ပါသည်။",
     # Group-specific schedule system. All user-facing text is configurable in /setmsg.
+    "schedule_menu_button": "Schedule",
+    "schedule_management_message": "📅 Schedule Management\nManage this group's schedules privately with the bot.",
+    "schedule_open_pm_prompt": "📅 Continue this schedule action in the bot's private chat.",
+    "schedule_pm_link_invalid": "❌ This schedule link is invalid or expired. Please press Schedule in the original group and try again.",
     "schedule_set_button": "Set Schedule",
     "schedule_remove_button": "Remove Schedule",
     "schedule_button_invalid": "❌ Button အမည်ကို တစ်ကြောင်းတည်းဖြင့် စာလုံး 1–64 လုံးအတွင်း ထည့်ပါ။",
-    "schedule_button_duplicate": "❌ Set Schedule နှင့် Remove Schedule button အမည်များ မတူညီရပါ။",
+    "schedule_button_duplicate": "❌ Schedule, Set Schedule နှင့် Remove Schedule button အမည်များ မတူညီရပါ။",
     "schedule_group_only": "❌ Schedule စနစ်ကို Group ထဲတွင်သာ အသုံးပြုနိုင်ပါသည်။",
     "schedule_admin_only": "❌ ဤလုပ်ဆောင်ချက်ကို Group Owner or Admins သာ အသုံးပြုနိုင်ပါသည်။",
     "schedule_time_prompt": "⏰ Schedule time ကို HH:MM ပုံစံဖြင့် ရိုက်ပါ (Yangon time):\nဥပမာ: 09:30\n\n(/cancel ဖြင့် ရပ်)",
@@ -1010,7 +1019,7 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
             )
             return SETMSG_AWAIT
 
-    if key in {"schedule_set_button", "schedule_remove_button"} and text.strip() != "/reset":
+    if key in {"schedule_menu_button", "schedule_set_button", "schedule_remove_button"} and text.strip() != "/reset":
         if (
             not text.strip()
             or len(text) > 64
@@ -1022,13 +1031,14 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
             )
             return SETMSG_AWAIT
 
-        other_key = (
-            "schedule_remove_button"
-            if key == "schedule_set_button"
-            else "schedule_set_button"
-        )
         candidate = _normalize_schedule_keyboard_text(text)
-        if candidate in _schedule_keyboard_labels(context.application.bot_data, other_key):
+        other_keys = {
+            "schedule_menu_button", "schedule_set_button", "schedule_remove_button"
+        } - {key}
+        if any(
+            candidate in _schedule_keyboard_labels(context.application.bot_data, other_key)
+            for other_key in other_keys
+        ):
             await _reply_custom(
                 msg, context.application.bot_data, "schedule_button_duplicate"
             )
@@ -1036,7 +1046,7 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
 
     if text.strip() == "/reset":
         custom = _get_custom_msgs(context.application.bot_data)
-        if key in {"schedule_set_button", "schedule_remove_button"}:
+        if key in {"schedule_menu_button", "schedule_set_button", "schedule_remove_button"}:
             _remember_schedule_button_alias(context.application.bot_data, key)
         if key == "number_words_link":
             context.application.bot_data.pop("number_words_link", None)
@@ -1098,7 +1108,7 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
             entities_raw = None
 
     custom = _get_custom_msgs(context.application.bot_data)
-    if key in {"schedule_set_button", "schedule_remove_button"}:
+    if key in {"schedule_menu_button", "schedule_set_button", "schedule_remove_button"}:
         _remember_schedule_button_alias(context.application.bot_data, key)
     message_config = {"text": text, "entities": entities_raw}
     if key == "form":
@@ -1976,12 +1986,8 @@ def _main_reply_keyboard(bot_data: dict, include_schedule: bool = False) -> Repl
     if include_schedule:
         rows.append([
             KeyboardButton(
-                _schedule_keyboard_label(bot_data, "schedule_set_button"),
+                _schedule_keyboard_label(bot_data, "schedule_menu_button"),
                 style="primary",
-            ),
-            KeyboardButton(
-                _schedule_keyboard_label(bot_data, "schedule_remove_button"),
-                style="danger",
             ),
         ])
     rows.append([KeyboardButton(NUMBER_WORDS_BUTTON, style="primary")])
@@ -2001,11 +2007,11 @@ async def ensure_reply_keyboard(update: Update, context: CallbackContext) -> Non
     text = (message.text or "").strip()
     if re.match(r"^/(?:start|menu)(?:@\w+)?(?:\s|$)", text, re.IGNORECASE):
         return
-    if context.chat_data.get("reply_keyboard_version") == "group-schedules-v1":
+    if context.chat_data.get("reply_keyboard_version") == "group-schedule-pm-v2":
         return
 
     context.chat_data["reply_keyboard_sent"] = True
-    context.chat_data["reply_keyboard_version"] = "group-schedules-v1"
+    context.chat_data["reply_keyboard_version"] = "group-schedule-pm-v2"
     bot_data = context.application.bot_data
     include_schedule = update.effective_chat.type in {"group", "supergroup"}
     await message.reply_text(
@@ -2019,7 +2025,7 @@ async def main_menu_command(
 ) -> None:
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
     context.chat_data["reply_keyboard_sent"] = True
-    context.chat_data["reply_keyboard_version"] = "group-schedules-v1"
+    context.chat_data["reply_keyboard_version"] = "group-schedule-pm-v2"
     bot_data = context.application.bot_data
     include_schedule = update.effective_chat.type in {"group", "supergroup"}
     reply_markup = _main_reply_keyboard(bot_data, include_schedule=include_schedule)
@@ -3417,16 +3423,39 @@ def _schedule_belongs_to_group(schedule: dict, group_id: int) -> bool:
     return any(str(value) == str(group_id) for value in schedule.get("group_ids", []))
 
 
+async def _is_group_schedule_admin(
+    context: CallbackContext, user_id: int, group_id: int
+) -> bool:
+    """Check current Telegram owner/admin membership in the originating group."""
+    try:
+        admins = await context.bot.get_chat_administrators(chat_id=int(group_id))
+        return any(admin.user.id == int(user_id) for admin in admins)
+    except Exception as exc:
+        logging.warning(
+            "Could not verify group admins for schedule action by user %s in group %s: %s",
+            user_id, group_id, exc
+        )
+        return False
+
+
 async def _require_group_schedule_admin(
     update: Update, context: CallbackContext
 ) -> bool:
-    """Schedules can only be managed by a group creator/administrator in that group."""
+    """Verify owner/admin rights for the group that owns this schedule session."""
     chat = update.effective_chat
     user = update.effective_user
     message = _update_message(update)
     bot_data = context.application.bot_data
 
-    if not _is_group_chat(chat):
+    if _is_group_chat(chat):
+        group_id = chat.id
+    elif chat and chat.type == "private":
+        group_id = context.user_data.get("schedule_pm_group_id")
+        if group_id is None:
+            if message:
+                await _reply_custom(message, bot_data, "schedule_group_only")
+            return False
+    else:
         if message:
             await _reply_custom(message, bot_data, "schedule_group_only")
         return False
@@ -3436,19 +3465,184 @@ async def _require_group_schedule_admin(
             await _reply_custom(message, bot_data, "schedule_admin_only")
         return False
 
-    try:
-        admins = await context.bot.get_chat_administrators(chat_id=chat.id)
-        allowed = any(admin.user.id == user.id for admin in admins)
-    except Exception as exc:
-        logging.warning(
-            "Could not verify group admins for schedule action by user %s in group %s: %s",
-            user.id, chat.id, exc
-        )
-        allowed = False
-
+    allowed = await _is_group_schedule_admin(context, user.id, int(group_id))
     if not allowed and message:
         await _reply_custom(message, bot_data, "schedule_admin_only")
     return allowed
+
+
+_SCHEDULE_PM_TOKEN_TTL_SECONDS = 300
+_SCHEDULE_PM_TOKENS: dict[str, dict] = {}
+
+
+def _create_schedule_pm_token(user_id: int, group_id: int, action: str) -> str:
+    """Create a short-lived, one-use, user/group/action-bound private-chat token."""
+    if action not in {"set", "remove"}:
+        raise ValueError("Unsupported schedule PM action")
+    now = datetime.now(pytz.UTC).timestamp()
+    for old_token, payload in list(_SCHEDULE_PM_TOKENS.items()):
+        if float(payload.get("expires_at", 0)) <= now:
+            _SCHEDULE_PM_TOKENS.pop(old_token, None)
+
+    token = secrets.token_urlsafe(18)
+    while token in _SCHEDULE_PM_TOKENS:
+        token = secrets.token_urlsafe(18)
+    _SCHEDULE_PM_TOKENS[token] = {
+        "user_id": int(user_id),
+        "group_id": int(group_id),
+        "action": action,
+        "expires_at": now + _SCHEDULE_PM_TOKEN_TTL_SECONDS,
+    }
+    return f"sched_{token}"
+
+
+def _consume_schedule_pm_token(parameter: str, user_id: int) -> dict | None:
+    """Consume a valid token exactly once and only for the user who requested it."""
+    match = re.fullmatch(r"sched_([A-Za-z0-9_-]{20,40})", parameter or "")
+    if not match:
+        return None
+    token = match.group(1)
+    payload = _SCHEDULE_PM_TOKENS.get(token)
+    if not payload:
+        return None
+    if float(payload.get("expires_at", 0)) <= datetime.now(pytz.UTC).timestamp():
+        _SCHEDULE_PM_TOKENS.pop(token, None)
+        return None
+    if str(payload.get("user_id")) != str(user_id):
+        return None
+    _SCHEDULE_PM_TOKENS.pop(token, None)
+    return dict(payload)
+
+
+async def _schedule_pm_deep_link(context: CallbackContext, parameter: str) -> str:
+    username = getattr(context.bot, "username", None)
+    if not username:
+        username = (await context.bot.get_me()).username
+    if not username:
+        raise RuntimeError("Telegram bot username is unavailable")
+    return f"https://t.me/{username}?start={parameter}"
+
+
+def _clear_schedule_pm_session(context: CallbackContext) -> None:
+    for key in (
+        "schedule_pm_group_id", "schedule_pm_action",
+        "new_schedule_group_id", "new_schedule_hour", "new_schedule_minute",
+        "new_schedule_message", "new_schedule_type",
+    ):
+        context.user_data.pop(key, None)
+
+
+async def _send_schedule_pm_link(
+    message, context: CallbackContext, group_id: int, action: str
+) -> None:
+    bot_data = context.application.bot_data
+    try:
+        parameter = _create_schedule_pm_token(message.from_user.id, group_id, action)
+        url = await _schedule_pm_deep_link(context, parameter)
+    except Exception:
+        logging.exception(
+            "Could not create schedule PM link for user %s, group %s",
+            getattr(getattr(message, "from_user", None), "id", None), group_id
+        )
+        await _reply_custom(message, bot_data, "schedule_pm_link_invalid")
+        return
+    await _reply_custom(
+        message,
+        bot_data,
+        "schedule_open_pm_prompt",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("Open Bot PM", url=url, style="primary")
+        ]]),
+    )
+
+
+async def schedule_management_menu(
+    update: Update, context: CallbackContext
+) -> None:
+    """Show the group-scoped private-management choices under the requested text."""
+    message = _update_message(update)
+    chat = update.effective_chat
+    if not message or not _is_group_chat(chat):
+        if message:
+            await _reply_custom(
+                message, context.application.bot_data, "schedule_group_only"
+            )
+        return
+
+    bot_data = context.application.bot_data
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(
+            _schedule_keyboard_label(bot_data, "schedule_set_button"),
+            callback_data="schedule_pm_open_set",
+            style="primary",
+        ),
+        InlineKeyboardButton(
+            _schedule_keyboard_label(bot_data, "schedule_remove_button"),
+            callback_data="schedule_pm_open_remove",
+            style="danger",
+        ),
+    ]])
+    await _reply_custom(
+        message, bot_data, "schedule_management_message",
+        reply_markup=keyboard,
+    )
+
+
+async def schedule_pm_open_callback(
+    update: Update, context: CallbackContext
+) -> None:
+    query = update.callback_query
+    chat = update.effective_chat
+    user = update.effective_user
+    bot_data = context.application.bot_data
+    if not query:
+        return
+    if not _is_group_chat(chat) or not user:
+        await query.answer(
+            "Open Schedule Management from its original group.", show_alert=True
+        )
+        return
+    if not await _is_group_schedule_admin(context, user.id, chat.id):
+        await query.answer(
+            get_msg(bot_data, "schedule_admin_only"), show_alert=True
+        )
+        return
+
+    action = {
+        "schedule_pm_open_set": "set",
+        "schedule_pm_open_remove": "remove",
+    }.get(query.data)
+    if not action:
+        await query.answer("This schedule action is no longer available.", show_alert=True)
+        return
+
+    parameter = _create_schedule_pm_token(user.id, chat.id, action)
+    try:
+        url = await _schedule_pm_deep_link(context, parameter)
+        await query.answer(url=url)
+    except Exception:
+        logging.exception(
+            "Could not open schedule PM for user %s, group %s", user.id, chat.id
+        )
+        try:
+            await query.answer(
+                "Please open the bot in private chat using the link below.",
+                show_alert=True,
+            )
+        except Exception:
+            pass
+        try:
+            await query.message.reply_text(
+                get_msg(bot_data, "schedule_open_pm_prompt"),
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "Open Bot PM", url=await _schedule_pm_deep_link(context, parameter),
+                        style="primary",
+                    )
+                ]]),
+            )
+        except Exception:
+            logging.exception("Could not send schedule PM fallback link")
 
 
 def _schedule_type_label(bot_data: dict, schedule: dict) -> str:
@@ -3502,23 +3696,68 @@ async def scheduled_message_job(context: CallbackContext) -> None:
 
 
 async def setschedule_command(update: Update, context: CallbackContext) -> int:
+    """Legacy group command redirects schedule creation to a bound PM session."""
+    chat = update.effective_chat
+    message = _update_message(update)
+    if not _is_group_chat(chat):
+        if message:
+            await _reply_custom(message, context.application.bot_data, "schedule_group_only")
+        return ConversationHandler.END
     if not await _require_group_schedule_admin(update, context):
         return ConversationHandler.END
+    if message:
+        await _send_schedule_pm_link(message, context, chat.id, "set")
+    return ConversationHandler.END
 
+
+async def schedule_start_entry(
+    update: Update, context: CallbackContext
+) -> int:
+    """Conversation entry point for normal /start and signed schedule PM links."""
     chat = update.effective_chat
-    context.user_data["new_schedule_group_id"] = chat.id
-    for key in (
-        "new_schedule_hour", "new_schedule_minute",
-        "new_schedule_message", "new_schedule_type",
-    ):
-        context.user_data.pop(key, None)
+    message = _update_message(update)
+    bot_data = context.application.bot_data
+    parameter = context.args[0] if context.args else ""
 
-    await _reply_custom(
-        _update_message(update),
-        context.application.bot_data,
-        "schedule_time_prompt",
-    )
-    return SCHEDULE_SET_TIME
+    if not chat or chat.type != "private" or not parameter.startswith("sched_"):
+        if chat and chat.type == "private":
+            _clear_schedule_pm_session(context)
+        await start(update, context)
+        return ConversationHandler.END
+
+    user = update.effective_user
+    payload = _consume_schedule_pm_token(parameter, user.id) if user else None
+    if not payload:
+        if message:
+            await _reply_custom(message, bot_data, "schedule_pm_link_invalid")
+        return ConversationHandler.END
+
+    _clear_schedule_pm_session(context)
+    group_id = int(payload["group_id"])
+    context.user_data["schedule_pm_group_id"] = group_id
+    context.user_data["schedule_pm_action"] = payload["action"]
+    if not await _require_group_schedule_admin(update, context):
+        _clear_schedule_pm_session(context)
+        return ConversationHandler.END
+
+    if payload["action"] == "set":
+        for key in (
+            "new_schedule_hour", "new_schedule_minute",
+            "new_schedule_message", "new_schedule_type",
+        ):
+            context.user_data.pop(key, None)
+        context.user_data["new_schedule_group_id"] = group_id
+        await _reply_custom(message, bot_data, "schedule_time_prompt")
+        return SCHEDULE_SET_TIME
+
+    if payload["action"] == "remove":
+        await _show_group_schedule_picker(update, context, group_id=group_id)
+        return ConversationHandler.END
+
+    _clear_schedule_pm_session(context)
+    if message:
+        await _reply_custom(message, bot_data, "schedule_pm_link_invalid")
+    return ConversationHandler.END
 
 
 async def schedule_set_time(update: Update, context: CallbackContext) -> int:
@@ -3579,27 +3818,35 @@ async def schedule_select_type(update: Update, context: CallbackContext) -> int:
 
     if query.data == "sched_cancel":
         await _edit_custom(query, bot_data, "schedule_cancelled")
-        for key in (
-            "new_schedule_group_id", "new_schedule_hour", "new_schedule_minute",
-            "new_schedule_message", "new_schedule_type",
-        ):
-            context.user_data.pop(key, None)
+        _clear_schedule_pm_session(context)
         return ConversationHandler.END
 
     if query.data not in {"sched_type_once", "sched_type_daily"}:
         await _edit_custom(query, bot_data, "schedule_missing_data")
+        _clear_schedule_pm_session(context)
         return ConversationHandler.END
 
-    if not await _require_group_schedule_admin(update, context):
+    if (
+        context.user_data.get("schedule_pm_action") != "set"
+        or not await _require_group_schedule_admin(update, context)
+    ):
         try:
             await query.edit_message_reply_markup(reply_markup=None)
         except Exception:
             pass
+        _clear_schedule_pm_session(context)
         return ConversationHandler.END
 
     group_id = context.user_data.get("new_schedule_group_id")
-    if not _is_group_chat(update.effective_chat) or str(group_id) != str(query.message.chat_id):
+    pm_group_id = context.user_data.get("schedule_pm_group_id")
+    if (
+        not update.effective_chat
+        or update.effective_chat.type != "private"
+        or pm_group_id is None
+        or str(group_id) != str(pm_group_id)
+    ):
         await _edit_custom(query, bot_data, "schedule_missing_data")
+        _clear_schedule_pm_session(context)
         return ConversationHandler.END
 
     hour = context.user_data.pop("new_schedule_hour", None)
@@ -3607,6 +3854,7 @@ async def schedule_select_type(update: Update, context: CallbackContext) -> int:
     message_text = context.user_data.pop("new_schedule_message", None)
     if hour is None or minute is None or not message_text:
         await _edit_custom(query, bot_data, "schedule_missing_data")
+        _clear_schedule_pm_session(context)
         return ConversationHandler.END
 
     schedule_type = "once" if query.data == "sched_type_once" else "daily"
@@ -3662,6 +3910,7 @@ async def schedule_select_type(update: Update, context: CallbackContext) -> int:
         logging.exception("Could not schedule job %s: %s", sched_id, exc)
         schedules.pop(sched_id, None)
         await _edit_custom(query, bot_data, "schedule_create_failed")
+        _clear_schedule_pm_session(context)
         return ConversationHandler.END
 
     mongo_result = save_schedule_to_mongo(sched_id, schedule)
@@ -3679,13 +3928,17 @@ async def schedule_select_type(update: Update, context: CallbackContext) -> int:
         if context.application.persistence:
             await context.application.persistence.flush()
         await _edit_custom(query, bot_data, "schedule_save_failed")
+        _clear_schedule_pm_session(context)
         return ConversationHandler.END
 
     if context.application.persistence:
         await context.application.persistence.flush()
 
-    chat = update.effective_chat
-    group_name = chat.title or str(group_id)
+    try:
+        originating_group = await context.bot.get_chat(chat_id=int(group_id))
+        group_name = originating_group.title or str(group_id)
+    except Exception:
+        group_name = str(group_id)
     if len(message_text) > 60:
         message_preview = message_text[:57] + "..."
     else:
@@ -3700,11 +3953,7 @@ async def schedule_select_type(update: Update, context: CallbackContext) -> int:
         group_name=group_name,
         schedule_id=sched_id,
     )
-    for key in (
-        "new_schedule_group_id", "new_schedule_hour", "new_schedule_minute",
-        "new_schedule_message", "new_schedule_type",
-    ):
-        context.user_data.pop(key, None)
+    _clear_schedule_pm_session(context)
     return ConversationHandler.END
 
 
@@ -3716,67 +3965,78 @@ async def schedule_cancel(update: Update, context: CallbackContext) -> int:
         await _edit_custom(update.callback_query, bot_data, "schedule_cancelled")
     elif message:
         await _reply_custom(message, bot_data, "schedule_cancelled")
-    for key in (
-        "new_schedule_group_id", "new_schedule_hour", "new_schedule_minute",
-        "new_schedule_message", "new_schedule_type",
-    ):
-        context.user_data.pop(key, None)
+    _clear_schedule_pm_session(context)
     return ConversationHandler.END
 
 
 async def _show_group_schedule_picker(
-    update: Update, context: CallbackContext, schedule_id_filter: str | None = None
+    update: Update,
+    context: CallbackContext,
+    schedule_id_filter: str | None = None,
+    group_id: int | None = None,
 ) -> None:
     message = _update_message(update)
     chat = update.effective_chat
     bot_data = context.application.bot_data
+    if group_id is None:
+        if chat and chat.type == "private":
+            group_id = context.user_data.get("schedule_pm_group_id")
+        elif _is_group_chat(chat):
+            group_id = chat.id
+    if not message or group_id is None:
+        if message:
+            await _reply_custom(message, bot_data, "schedule_group_only")
+        return
+
+    group_id = int(group_id)
     schedules = bot_data.get("schedules", {})
     group_schedules = [
         (str(sched_id), sched)
         for sched_id, sched in schedules.items()
-        if _schedule_belongs_to_group(sched, chat.id)
+        if _schedule_belongs_to_group(sched, group_id)
         and (schedule_id_filter is None or str(sched_id) == str(schedule_id_filter))
     ]
 
     if not group_schedules:
-        context.chat_data.pop("schedule_remove_menu", None)
-        await _reply_custom(
-            message, bot_data, "schedule_remove_none",
-            reply_markup=_main_reply_keyboard(bot_data, include_schedule=True),
-        )
+        await _reply_custom(message, bot_data, "schedule_remove_none")
+        if chat and chat.type == "private":
+            _clear_schedule_pm_session(context)
         return
 
-    options = {}
     keyboard = []
     for sched_id, sched in sorted(
-        group_schedules, key=lambda item: (int(item[1].get("hour", 0)), int(item[1].get("minute", 0)), item[0])
-    ):
-        label = _schedule_picker_label(bot_data, sched_id, sched)
-        options[label] = sched_id
-        keyboard.append([KeyboardButton(label)])
-
-    cancel_label = _schedule_keyboard_label(bot_data, "schedule_remove_cancel_button")
-    keyboard.append([KeyboardButton(cancel_label)])
-    context.chat_data["schedule_remove_menu"] = {
-        "chat_id": chat.id,
-        "options": options,
-        "cancel_label": cancel_label,
-    }
-    await _reply_custom(
-        message,
-        bot_data,
-        "schedule_remove_prompt",
-        reply_markup=ReplyKeyboardMarkup(
-            keyboard, resize_keyboard=True, one_time_keyboard=True
+        group_schedules,
+        key=lambda item: (
+            int(item[1].get("hour", 0)), int(item[1].get("minute", 0)), item[0]
         ),
+    ):
+        keyboard.append([InlineKeyboardButton(
+            _schedule_picker_label(bot_data, sched_id, sched),
+            callback_data=f"sched_remove_pick_{sched_id}",
+        )])
+    keyboard.append([InlineKeyboardButton(
+        _schedule_keyboard_label(bot_data, "schedule_remove_cancel_button"),
+        callback_data="sched_remove_cancel",
+        style="primary",
+    )])
+    await _reply_custom(
+        message, bot_data, "schedule_remove_prompt",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 
 async def removeschedule_command(update: Update, context: CallbackContext) -> None:
+    """Legacy group command redirects schedule removal to a bound PM session."""
+    chat = update.effective_chat
+    message = _update_message(update)
+    if not _is_group_chat(chat):
+        if message:
+            await _reply_custom(message, context.application.bot_data, "schedule_group_only")
+        return
     if not await _require_group_schedule_admin(update, context):
         return
-    schedule_filter = context.args[0].strip() if context.args else None
-    await _show_group_schedule_picker(update, context, schedule_filter)
+    if message:
+        await _send_schedule_pm_link(message, context, chat.id, "remove")
 
 
 async def schedule_remove_text_handler(
@@ -3851,48 +4111,128 @@ async def schedule_remove_text_handler(
 
 async def schedule_remove_callback(update: Update, context: CallbackContext) -> None:
     query = update.callback_query
-    await query.answer()
+    if not query:
+        return
     bot_data = context.application.bot_data
+    data = query.data or ""
+    chat = update.effective_chat
+    user = update.effective_user
 
-    # Unauthorized clicks must not remove the confirmation keyboard for admins.
-    if not await _require_group_schedule_admin(update, context):
+    # Old group confirmations must not perform any change in the group anymore.
+    # Redirect legacy Delete buttons into a fresh user/group-bound PM session.
+    if _is_group_chat(chat):
+        if data == "sched_remove_cancel":
+            await query.answer()
+            await _edit_custom(query, bot_data, "schedule_remove_cancelled")
+            return
+        if not user or not await _is_group_schedule_admin(context, user.id, chat.id):
+            await query.answer(
+                get_msg(bot_data, "schedule_admin_only"), show_alert=True
+            )
+            return
+        parameter = _create_schedule_pm_token(user.id, chat.id, "remove")
+        try:
+            url = await _schedule_pm_deep_link(context, parameter)
+            await query.answer(url=url)
+        except Exception:
+            logging.exception(
+                "Could not redirect legacy group schedule action to PM: user=%s group=%s",
+                user.id, chat.id,
+            )
+            try:
+                await query.answer(
+                    "Please open the bot in private chat using the link below.",
+                    show_alert=True,
+                )
+            except Exception:
+                pass
+            try:
+                await query.message.reply_text(
+                    get_msg(bot_data, "schedule_open_pm_prompt"),
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton(
+                            "Open Bot PM",
+                            url=await _schedule_pm_deep_link(context, parameter),
+                            style="primary",
+                        )
+                    ]]),
+                )
+            except Exception:
+                logging.exception("Could not send legacy schedule PM fallback link")
         return
 
-    chat = update.effective_chat
-    data = query.data
+    await query.answer()
+    if not chat or chat.type != "private":
+        return
+    group_id = context.user_data.get("schedule_pm_group_id")
+    if (
+        group_id is None
+        or context.user_data.get("schedule_pm_action") != "remove"
+        or not await _require_group_schedule_admin(update, context)
+    ):
+        _clear_schedule_pm_session(context)
+        return
+    group_id = int(group_id)
+
     if data == "sched_remove_cancel":
-        context.chat_data.pop("schedule_remove_menu", None)
         await _edit_custom(query, bot_data, "schedule_remove_cancelled")
-        await query.message.reply_text(
-            get_msg(bot_data, "schedule_menu_restored"),
-            reply_markup=_main_reply_keyboard(bot_data, include_schedule=True),
+        _clear_schedule_pm_session(context)
+        return
+
+    pick_match = re.fullmatch(r"sched_remove_pick_([A-Za-z0-9_-]+)", data)
+    if pick_match:
+        sched_id = pick_match.group(1)
+        schedule = bot_data.get("schedules", {}).get(sched_id)
+        if not schedule or not _schedule_belongs_to_group(schedule, group_id):
+            await _edit_custom(query, bot_data, "schedule_not_found")
+            _clear_schedule_pm_session(context)
+            return
+        schedule_time = f"{int(schedule.get('hour', 0)):02d}:{int(schedule.get('minute', 0)):02d}"
+        confirm_keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                _schedule_keyboard_label(bot_data, "schedule_delete_button"),
+                callback_data=f"sched_remove_delete_{sched_id}",
+                style="danger",
+            )],
+            [InlineKeyboardButton(
+                _schedule_keyboard_label(bot_data, "schedule_delete_cancel_button"),
+                callback_data="sched_remove_cancel",
+                style="primary",
+            )],
+        ])
+        await _edit_custom(
+            query,
+            bot_data,
+            "schedule_remove_confirm",
+            reply_markup=confirm_keyboard,
+            time=schedule_time,
+            type=_schedule_type_label(bot_data, schedule),
+            message=str(schedule.get("message", ""))[:300],
+            id=sched_id,
         )
         return
 
-    match = re.fullmatch(r"sched_remove_delete_([A-Za-z0-9_-]+)", data or "")
-    if not match:
+    delete_match = re.fullmatch(r"sched_remove_delete_([A-Za-z0-9_-]+)", data)
+    if not delete_match:
         await _edit_custom(query, bot_data, "schedule_not_found")
+        _clear_schedule_pm_session(context)
         return
-    sched_id = match.group(1)
+
+    sched_id = delete_match.group(1)
     schedules = bot_data.get("schedules", {})
     schedule = schedules.get(sched_id)
-    if not schedule or not _schedule_belongs_to_group(schedule, chat.id):
-        context.chat_data.pop("schedule_remove_menu", None)
+    if not schedule or not _schedule_belongs_to_group(schedule, group_id):
         await _edit_custom(query, bot_data, "schedule_not_found")
-        await query.message.reply_text(
-            get_msg(bot_data, "schedule_menu_restored"),
-            reply_markup=_main_reply_keyboard(bot_data, include_schedule=True),
-        )
+        _clear_schedule_pm_session(context)
         return
 
     schedule_time = f"{int(schedule.get('hour', 0)):02d}:{int(schedule.get('minute', 0)):02d}"
     remaining_groups = [
         value for value in schedule.get("group_ids", [])
-        if str(value) != str(chat.id)
+        if str(value) != str(group_id)
     ]
 
-    # Legacy admin-created schedules may contain several groups. Detach only this
-    # group, preserving the other groups' jobs and MongoDB document.
+    # Detach only the originating group; preserve any legacy shared schedule.
     if remaining_groups:
         updated_schedule = dict(schedule)
         updated_schedule["group_ids"] = remaining_groups
@@ -3912,16 +4252,10 @@ async def schedule_remove_callback(update: Update, context: CallbackContext) -> 
 
     if context.application.persistence:
         await context.application.persistence.flush()
-
-    context.chat_data.pop("schedule_remove_menu", None)
     await _edit_custom(
         query, bot_data, "schedule_delete_success", id=sched_id, time=schedule_time
     )
-    await query.message.reply_text(
-        get_msg(bot_data, "schedule_menu_restored"),
-        reply_markup=_main_reply_keyboard(bot_data, include_schedule=True),
-    )
-
+    _clear_schedule_pm_session(context)
 
 async def listschedules_command(update: Update, context: CallbackContext) -> None:
     if not await _require_group_schedule_admin(update, context):
@@ -4675,41 +5009,36 @@ def main():
     ))
     # Dynamic filters use the supported PTB MessageFilter subclass API. They
     # read current /setmsg labels and retain aliases for already-shown keyboards.
-    class _ScheduleSetButtonFilter(filters.MessageFilter):
+    class _ScheduleMenuButtonFilter(filters.MessageFilter):
         def filter(self, message):
-            return bool(
-                message.text
-                and _normalize_schedule_keyboard_text(message.text) in
-                _schedule_keyboard_labels(application.bot_data, "schedule_set_button")
-            )
-
-    class _ScheduleRemoveActionFilter(filters.MessageFilter):
-        def filter(self, message):
-            if not message or not message.text or not message.from_user or not message.chat:
+            if not message or not message.text:
                 return False
-            text = message.text.strip()
-            if text in _schedule_keyboard_labels(application.bot_data, "schedule_remove_button"):
-                return True
-            chat_state = application.chat_data.get(message.chat.id, {})
-            menu = chat_state.get("schedule_remove_menu", {})
-            if str(menu.get("chat_id")) != str(message.chat.id):
-                return False
-            return text == menu.get("cancel_label") or text in menu.get("options", {})
+            text = _normalize_schedule_keyboard_text(message.text)
+            bot_data = application.bot_data
+            labels = _schedule_keyboard_labels(bot_data, "schedule_menu_button")
+            # Route labels still present on pre-deploy ReplyKeyboards to the
+            # new management menu, never to a group-side workflow.
+            labels.update(_schedule_keyboard_labels(bot_data, "schedule_set_button"))
+            labels.update(_schedule_keyboard_labels(bot_data, "schedule_remove_button"))
+            return text in labels
 
-    schedule_set_button_filter = (
-        _ScheduleSetButtonFilter() & filters.ChatType.GROUPS
-    )
-    schedule_remove_action_filter = (
-        _ScheduleRemoveActionFilter() & filters.ChatType.GROUPS
+    schedule_menu_button_filter = (
+        _ScheduleMenuButtonFilter() & filters.ChatType.GROUPS
     )
 
+    application.add_handler(MessageHandler(
+        schedule_menu_button_filter,
+        schedule_management_menu,
+    ))
     application.add_handler(MessageHandler(
         filters.TEXT & filters.Regex(
             r'^(Showdata|Total Plus|Clear Data|Reset Plus|Clear All|Reset Plus All)$'
         ),
         main_menu_text_handler,
     ))
-    application.add_handler(CommandHandler("start", start))
+    # Group /start remains unchanged; private /start is routed through the
+    # schedule conversation entry point so a signed deep link can start state.
+    application.add_handler(CommandHandler("start", start, filters=filters.ChatType.GROUPS))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("showdata", show_data))
     application.add_handler(CommandHandler("cleardata", clear_data))
@@ -4827,8 +5156,8 @@ def main():
 
     schedule_handler = ConversationHandler(
         entry_points=[
-            CommandHandler("setschedule", setschedule_command),
-            MessageHandler(schedule_set_button_filter, setschedule_command),
+            CommandHandler("start", schedule_start_entry, filters=filters.ChatType.PRIVATE),
+            CommandHandler("setschedule", setschedule_command, filters=filters.ChatType.GROUPS),
         ],
         states={
             SCHEDULE_SET_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule_set_time)],
@@ -4837,20 +5166,18 @@ def main():
         },
         fallbacks=[
             CallbackQueryHandler(schedule_cancel, pattern=r'^sched_cancel$'),
-            CommandHandler('cancel', cancel_conversation)
+            CommandHandler('cancel', schedule_cancel),
         ],
         allow_reentry=True,
     )
     application.add_handler(schedule_handler)
-    # Give an active Set Schedule conversation first refusal on text input. This
-    # prevents a schedule message equal to a menu label from being intercepted.
-    application.add_handler(MessageHandler(
-        schedule_remove_action_filter,
-        schedule_remove_text_handler,
+    application.add_handler(CallbackQueryHandler(
+        schedule_pm_open_callback,
+        pattern=r'^schedule_pm_open_(?:set|remove)$',
     ))
     application.add_handler(CallbackQueryHandler(
         schedule_remove_callback,
-        pattern=r'^sched_remove_(?:delete_[A-Za-z0-9_-]+|cancel)$',
+        pattern=r'^sched_remove_(?:pick_[A-Za-z0-9_-]+|delete_[A-Za-z0-9_-]+|cancel)$',
     ))
 
     feedback_handler = ConversationHandler(
