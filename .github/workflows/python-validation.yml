@@ -37,7 +37,10 @@ jobs:
           BOT_TOKEN: "123456:TEST_TOKEN_FOR_HANDLER_SMOKE_TEST"
         run: |
           python - <<'PY'
+          import asyncio
+          import ast
           import sys
+          from pathlib import Path
 
           sys.path.insert(0, "telegram-bot")
           import main as bot
@@ -70,4 +73,72 @@ jobs:
           assert "schedule_admin_only" in bot.DEFAULT_MSGS
           assert "schedule_admin_only" in bot.CUSTOM_MSG_LABELS
           print("Handler registration and group/private schedule keyboard checks passed.")
+
+          # Regression: the custom schedule message contains a {message} placeholder,
+          # which must not collide with _reply_custom's target Telegram message argument.
+          class FakeMessage:
+              def __init__(self):
+                  self.text = None
+                  self.kwargs = None
+
+              async def reply_text(self, text, **kwargs):
+                  self.text = text
+                  self.kwargs = kwargs
+
+          target = FakeMessage()
+          asyncio.run(bot._reply_custom(
+              target,
+              {},
+              "schedule_remove_confirm",
+              message="raw <6 & untrusted text",
+          ))
+          assert "raw <6 & untrusted text" in target.text
+          assert "{message}" not in target.text
+          print("Schedule confirmation placeholder regression test passed.")
+
+          # Regression: admin error reports must be safe for arbitrary exception text.
+          class FakeBot:
+              def __init__(self):
+                  self.sent = []
+
+              async def send_message(self, **kwargs):
+                  self.sent.append(kwargs)
+
+          class FakeApplication:
+              def __init__(self):
+                  self.bot_data = {}
+                  self.bot = FakeBot()
+
+          class FakeContext:
+              def __init__(self):
+                  self.error = ValueError("Entity_text_invalid: <6 & unsafe")
+                  self.application = FakeApplication()
+
+          ctx = FakeContext()
+          original_admin_ids = bot.ADMIN_IDS
+          try:
+              bot.ADMIN_IDS = [123456789]
+              asyncio.run(bot.error_handler(None, ctx))
+          finally:
+              bot.ADMIN_IDS = original_admin_ids
+
+          assert len(ctx.application.bot.sent) == 1
+          admin_report = ctx.application.bot.sent[0]
+          assert "Entity_text_invalid: <6 & unsafe" in admin_report["text"]
+          assert "parse_mode" not in admin_report
+          print("Plain-text admin error reporting regression test passed.")
+
+          # Regression: a clean Render shutdown must not restart the same poller
+          # inside a closed event loop.
+          tree = ast.parse(Path("telegram-bot/main.py").read_text(encoding="utf-8"))
+          main_guard = [
+              node for node in tree.body
+              if isinstance(node, ast.If)
+              and isinstance(node.test, ast.Compare)
+              and isinstance(node.test.left, ast.Name)
+              and node.test.left.id == "__name__"
+          ]
+          assert main_guard
+          assert not any(isinstance(node, ast.While) for node in ast.walk(main_guard[-1]))
+          print("Single-run polling shutdown regression test passed.")
           PY

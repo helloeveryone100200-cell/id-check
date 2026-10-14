@@ -743,7 +743,7 @@ def _plus_reaction_confirmation(config: dict) -> tuple[str, list | None]:
     return text, _build_entities(shifted)
 
 
-async def _reply_custom(message, bot_data: dict, key: str,
+async def _reply_custom(target_message, bot_data: dict, key: str,
                         reply_markup=None, parse_mode=None, suffix="",
                         **fmt):
     """Reply with a customisable message, preserving premium-emoji entities.
@@ -761,9 +761,9 @@ async def _reply_custom(message, bot_data: dict, key: str,
     entities = _build_entities(adj_entities_raw) if adj_entities_raw else None
 
     if entities:
-        await message.reply_text(text, entities=entities, reply_markup=reply_markup)
+        await target_message.reply_text(text, entities=entities, reply_markup=reply_markup)
     else:
-        await message.reply_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+        await target_message.reply_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
 
 
 async def _send_custom(bot, chat_id: int, bot_data: dict, key: str,
@@ -3626,12 +3626,6 @@ async def schedule_select_type(update: Update, context: CallbackContext) -> int:
     }
     schedules[sched_id] = schedule
 
-    mongo_result = save_schedule_to_mongo(sched_id, schedule)
-    if mongo_result is False:
-        schedules.pop(sched_id, None)
-        await _edit_custom(query, bot_data, "schedule_save_failed")
-        return ConversationHandler.END
-
     try:
         tz = get_yangon_tz()
         if schedule_type == "once":
@@ -3667,8 +3661,24 @@ async def schedule_select_type(update: Update, context: CallbackContext) -> int:
     except Exception as exc:
         logging.exception("Could not schedule job %s: %s", sched_id, exc)
         schedules.pop(sched_id, None)
-        delete_schedule_from_mongo(sched_id)
         await _edit_custom(query, bot_data, "schedule_create_failed")
+        return ConversationHandler.END
+
+    mongo_result = save_schedule_to_mongo(sched_id, schedule)
+    if mongo_result is not True:
+        schedules.pop(sched_id, None)
+        for job in context.application.job_queue.get_jobs_by_name(sched_id):
+            job.schedule_removal()
+        if mongo_result is False:
+            cleanup_result = delete_schedule_from_mongo(sched_id)
+            if cleanup_result is False:
+                logging.error(
+                    "Could not roll back schedule %s after MongoDB save failure",
+                    sched_id,
+                )
+        if context.application.persistence:
+            await context.application.persistence.flush()
+        await _edit_custom(query, bot_data, "schedule_save_failed")
         return ConversationHandler.END
 
     if context.application.persistence:
@@ -3887,13 +3897,13 @@ async def schedule_remove_callback(update: Update, context: CallbackContext) -> 
         updated_schedule = dict(schedule)
         updated_schedule["group_ids"] = remaining_groups
         mongo_result = save_schedule_to_mongo(sched_id, updated_schedule)
-        if mongo_result is False:
+        if mongo_result is not True:
             await _edit_custom(query, bot_data, "schedule_delete_failed")
             return
         schedule["group_ids"] = remaining_groups
     else:
         mongo_result = delete_schedule_from_mongo(sched_id)
-        if mongo_result is False:
+        if mongo_result is not True:
             await _edit_custom(query, bot_data, "schedule_delete_failed")
             return
         schedules.pop(sched_id, None)
@@ -4611,10 +4621,12 @@ async def error_handler(update: object, context: CallbackContext) -> None:
             f"💬 Chat: {chat.title if chat and chat.title else 'PM'} (ID: {chat.id if chat else 'N/A'})"
         )
 
+    # Plain text avoids secondary Telegram HTML-entity failures when exception
+    # details, usernames, group titles, or tracebacks contain angle brackets.
     error_msg = (
-        f"⚠️ <b>Bot Error</b>{update_info}\n\n"
-        f"<b>Error:</b> <code>{str(err)[:500]}</code>\n\n"
-        f"<b>Traceback:</b>\n<pre>{tb_str[-1500:]}</pre>"
+        f"⚠️ BOT ERROR{update_info}\n\n"
+        f"Error: {str(err)[:500]}\n\n"
+        f"Traceback:\n{tb_str[-1500:]}"
     )
 
     for admin_id in ADMIN_IDS:
@@ -4622,7 +4634,6 @@ async def error_handler(update: object, context: CallbackContext) -> None:
             await context.application.bot.send_message(
                 chat_id=admin_id,
                 text=error_msg,
-                parse_mode='HTML'
             )
         except Exception as e:
             logging.warning(f"Could not notify admin {admin_id}: {e}")
@@ -4908,11 +4919,5 @@ def main():
 
 
 if __name__ == '__main__':
-    import time as _time
     keep_alive()
-    while True:
-        try:
-            main()
-        except Exception as _e:
-            logging.error(f"Bot crashed: {_e}. Restarting in 10 seconds...")
-            _time.sleep(10)
+    main()
