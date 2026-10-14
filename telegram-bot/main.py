@@ -894,8 +894,9 @@ async def setmsg_start(update: Update, context: CallbackContext) -> int:
                 button_label = button_label[2:]
 
         keyboard.append([InlineKeyboardButton(button_label, **button_kwargs)])
+        # Keep the original label if the fallback removes the custom icon.
         plain_keyboard.append([
-            InlineKeyboardButton(button_label, callback_data=callback_data)
+            InlineKeyboardButton(label, callback_data=callback_data)
         ])
 
     cancel_button = InlineKeyboardButton("❌ Cancel", callback_data="setmsg_cancel")
