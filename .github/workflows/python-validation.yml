@@ -1,0 +1,73 @@
+name: Python validation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  compile-and-handler-smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Compile Python sources
+        run: |
+          python -m py_compile bot.py telegram-bot/main.py telegram-bot/web_server.py
+
+      - name: Smoke-test handler registration and group keyboards
+        env:
+          BOT_TOKEN: "123456:TEST_TOKEN_FOR_HANDLER_SMOKE_TEST"
+        run: |
+          python - <<'PY'
+          import sys
+
+          sys.path.insert(0, "telegram-bot")
+          import main as bot
+
+          # Register all handlers without making a Telegram API request or
+          # starting polling. This catches invalid filters, callback patterns,
+          # and handler configuration errors before a Render deployment.
+          original_run_polling = bot.Application.run_polling
+          try:
+              bot.Application.run_polling = lambda self, *args, **kwargs: None
+              bot.main()
+          finally:
+              bot.Application.run_polling = original_run_polling
+
+          private_buttons = [
+              button.text
+              for row in bot._main_reply_keyboard({}, include_schedule=False).keyboard
+              for button in row
+          ]
+          group_buttons = [
+              button.text
+              for row in bot._main_reply_keyboard({}, include_schedule=True).keyboard
+              for button in row
+          ]
+
+          assert "Set Schedule" not in private_buttons
+          assert "Remove Schedule" not in private_buttons
+          assert "Set Schedule" in group_buttons
+          assert "Remove Schedule" in group_buttons
+          assert "schedule_admin_only" in bot.DEFAULT_MSGS
+          assert "schedule_admin_only" in bot.CUSTOM_MSG_LABELS
+          print("Handler registration and group/private schedule keyboard checks passed.")
+          PY
