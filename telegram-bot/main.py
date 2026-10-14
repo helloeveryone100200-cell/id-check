@@ -25,7 +25,7 @@ from telegram.ext import (
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
     KeyboardButton, ReplyKeyboardMarkup,
-    InputFile, BotCommand, BotCommandScopeChat, MessageEntity,
+    InputFile, BotCommand, BotCommandScopeChat, BotCommandScopeAllGroupChats, MessageEntity,
     ReactionTypeEmoji, ReactionTypeCustomEmoji
 )
 from telegram.ext import CallbackContext
@@ -51,7 +51,6 @@ BROADCAST_CONFIRMATION = 12
 SCHEDULE_SET_TIME = 20
 SCHEDULE_SET_MESSAGE = 21
 SCHEDULE_SELECT_TYPE = 23
-SCHEDULE_SELECT_GROUP = 22
 
 BOT_SETTINGS_SELECT   = 40
 BOT_SETTINGS_AWAITING = 41
@@ -4466,19 +4465,31 @@ async def post_init(application: Application) -> None:
         BotCommand("reset_plus",     "Plus counter ရှင်း"),
         BotCommand("feedback",       "Admin ထံ မှတ်ချက်"),
     ]
+    group_commands = public_commands + [
+        BotCommand("setschedule",   "Set a schedule for this group"),
+        BotCommand("removeschedule", "Remove a schedule from this group"),
+        BotCommand("listschedules", "List schedules for this group"),
+    ]
     admin_commands = public_commands + [
         BotCommand("stats",          "Bot stats (Admin)"),
         BotCommand("listusers",      "User list (Admin)"),
         BotCommand("listgroups",     "Group list (Admin)"),
-        BotCommand("listschedules",  "Schedule list"),
         BotCommand("admin",          "Admin panel (Admin)"),
         BotCommand("clearall",       "Data အားလုံး ရှင်း (Admin PM)"),
         BotCommand("resetplusall",   "Plus counter အားလုံး reset (Admin PM)"),
     ]
 
-    # Regular users see only the public commands. Each configured admin gets
-    # the same list plus the admin-only commands in their private menu.
+    # Schedule commands are listed in group chats only, never in private chats.
     await application.bot.set_my_commands(public_commands)
+    try:
+        await application.bot.set_my_commands(
+            group_commands,
+            scope=BotCommandScopeAllGroupChats(),
+        )
+    except Exception as exc:
+        logging.warning("Could not set group schedule command menu: %s", exc)
+
+    # Each configured admin keeps the admin-only commands in their private menu.
     for admin_id in ADMIN_IDS:
         try:
             await application.bot.set_my_commands(
