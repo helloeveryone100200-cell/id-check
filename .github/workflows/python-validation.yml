@@ -116,13 +116,27 @@ jobs:
           class FakeMessage:
               def __init__(self):
                   self.sent = []
+                  self.reject_custom_icon = True
               async def reply_text(self, text, **kwargs):
+                  markup = kwargs.get("reply_markup")
+                  buttons = [
+                      button for row in getattr(markup, "inline_keyboard", [])
+                      for button in row
+                  ]
+                  if self.reject_custom_icon and any(
+                      getattr(button, "icon_custom_emoji_id", None)
+                      for button in buttons
+                  ):
+                      self.reject_custom_icon = False
+                      raise bot.BadRequest("custom emoji buttons are unavailable")
                   self.sent.append((text, kwargs))
 
           fake_message = FakeMessage()
           setmsg_owner_id = os.environ.get("OWNER_ID")
+          original_get_custom_emoji_id = bot._get_first_custom_emoji_id
           try:
               os.environ["OWNER_ID"] = "123456"
+              bot._get_first_custom_emoji_id = lambda *args: "987654"
               fake_update = SimpleNamespace(
                   message=fake_message,
                   effective_user=SimpleNamespace(id=123456),
@@ -146,7 +160,13 @@ jobs:
                   and button.text == bot.CUSTOM_MSG_LABELS["schedule_management_message"]
                   for button in visible_buttons
               )
+              assert not any(
+                  getattr(button, "icon_custom_emoji_id", None)
+                  for button in visible_buttons
+              )
+              assert fake_message.reject_custom_icon is False
           finally:
+              bot._get_first_custom_emoji_id = original_get_custom_emoji_id
               if setmsg_owner_id is None:
                   os.environ.pop("OWNER_ID", None)
               else:
