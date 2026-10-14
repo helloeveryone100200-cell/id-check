@@ -3720,6 +3720,8 @@ async def schedule_start_entry(
     parameter = context.args[0] if context.args else ""
 
     if not chat or chat.type != "private" or not parameter.startswith("sched_"):
+        if chat and chat.type == "private":
+            _clear_schedule_pm_session(context)
         await start(update, context)
         return ConversationHandler.END
 
@@ -5164,7 +5166,7 @@ def main():
         },
         fallbacks=[
             CallbackQueryHandler(schedule_cancel, pattern=r'^sched_cancel$'),
-            CommandHandler('cancel', cancel_conversation)
+            CommandHandler('cancel', schedule_cancel),
         ],
         allow_reentry=True,
     )
