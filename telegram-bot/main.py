@@ -638,6 +638,28 @@ def _public_bot_commands() -> list[BotCommand]:
     ]
 
 
+def _admin_bot_commands() -> list[BotCommand]:
+    """Commands available in the configured owner's and admins' private menus."""
+    return _public_bot_commands() + [
+        BotCommand("setmsg", "Customize bot messages (Owner/Admin only)"),
+        BotCommand("stats", "Bot stats (Admin)"),
+        BotCommand("listusers", "User list (Admin)"),
+        BotCommand("listgroups", "Group list (Admin)"),
+        BotCommand("admin", "Admin panel (Admin)"),
+        BotCommand("clearall", "Clear all data (Admin PM)"),
+        BotCommand("resetplusall", "Reset all plus counters (Admin PM)"),
+    ]
+
+
+def _admin_command_menu_ids() -> list[int]:
+    """Return configured admins plus OWNER_ID, without duplicate menu writes."""
+    ids = {int(user_id) for user_id in ADMIN_IDS}
+    owner_id = os.getenv("OWNER_ID", "").strip()
+    if owner_id.isdigit():
+        ids.add(int(owner_id))
+    return sorted(ids)
+
+
 def _group_bot_commands(bot_data: dict) -> list[BotCommand]:
     def description(key: str) -> str:
         value = " ".join(get_msg(bot_data, key).split())[:256]
@@ -828,7 +850,17 @@ async def _edit_custom(query, bot_data: dict, key: str,
 
 async def setmsg_start(update: Update, context: CallbackContext) -> int:
     user = update.effective_user
+    chat = update.effective_chat
+    logging.info(
+        "Received /setmsg: user_id=%s chat_type=%s",
+        user.id if user else None,
+        chat.type if chat else None,
+    )
     if not user or not _is_owner_or_admin(user.id):
+        logging.warning(
+            "/setmsg denied: user_id=%s",
+            user.id if user else None,
+        )
         await update.message.reply_text("❌ Bot owner/admin သာ ဤ command ကို သုံးနိုင်သည်။")
         return ConversationHandler.END
     if update.effective_chat.type != "private":
@@ -4897,14 +4929,7 @@ async def post_init(application: Application) -> None:
         name='auto_clear_daily'
     )
     public_commands = _public_bot_commands()
-    admin_commands = public_commands + [
-        BotCommand("stats",          "Bot stats (Admin)"),
-        BotCommand("listusers",      "User list (Admin)"),
-        BotCommand("listgroups",     "Group list (Admin)"),
-        BotCommand("admin",          "Admin panel (Admin)"),
-        BotCommand("clearall",       "Data အားလုံး ရှင်း (Admin PM)"),
-        BotCommand("resetplusall",   "Plus counter အားလုံး reset (Admin PM)"),
-    ]
+    admin_commands = _admin_bot_commands()
 
     # Schedule commands are listed in group chats only, never in private chats.
     await application.bot.set_my_commands(public_commands)
@@ -4913,7 +4938,7 @@ async def post_init(application: Application) -> None:
     )
 
     # Each configured admin keeps the admin-only commands in their private menu.
-    for admin_id in ADMIN_IDS:
+    for admin_id in _admin_command_menu_ids():
         try:
             await application.bot.set_my_commands(
                 admin_commands,
@@ -4995,6 +5020,254 @@ def main():
         .pool_timeout(30.0)
         .build()
     )
+
+    # /setmsg — owner-only message customiser
+    setmsg_handler = ConversationHandler(
+        entry_points=[CommandHandler("setmsg", setmsg_start, filters=filters.ChatType.PRIVATE)],
+        states={
+            SETMSG_SELECT: [
+                CallbackQueryHandler(setmsg_select, pattern=r'^setmsg_'),
+            ],
+            PLUS_REACTION_AWAIT: [
+                CommandHandler("reset", plus_reaction_receive),
+                CommandHandler("cancel", plus_reaction_cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, plus_reaction_receive),
+            ],
+            SETMSG_AWAIT: [
+                CommandHandler("reset", setmsg_receive),
+                CommandHandler("cancel", setmsg_cancel_conv),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, setmsg_receive),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(setmsg_cancel_conv, pattern=r'^setmsg_cancel    application.add_handler(CommandHandler("menu", main_menu_command))
+    application.add_handler(MessageHandler(
+        filters.TEXT
+        & filters.Regex(r"^Numbers to Words Converter$")
+        & filters.ChatType.PRIVATE,
+        number_words_start,
+    ))
+    # Dynamic filters use the supported PTB MessageFilter subclass API. They
+    # read current /setmsg labels and retain aliases for already-shown keyboards.
+    class _ScheduleMenuButtonFilter(filters.MessageFilter):
+        def filter(self, message):
+            if not message or not message.text:
+                return False
+            text = _normalize_schedule_keyboard_text(message.text)
+            bot_data = application.bot_data
+            labels = _schedule_keyboard_labels(bot_data, "schedule_menu_button")
+            # Route labels still present on pre-deploy ReplyKeyboards to the
+            # new management menu, never to a group-side workflow.
+            labels.update(_schedule_keyboard_labels(bot_data, "schedule_set_button"))
+            labels.update(_schedule_keyboard_labels(bot_data, "schedule_remove_button"))
+            return text in labels
+
+    schedule_menu_button_filter = (
+        _ScheduleMenuButtonFilter() & filters.ChatType.GROUPS
+    )
+
+    application.add_handler(MessageHandler(
+        schedule_menu_button_filter,
+        schedule_management_menu,
+    ))
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(
+            r'^(Showdata|Total Plus|Clear Data|Reset Plus|Clear All|Reset Plus All)$'
+        ),
+        main_menu_text_handler,
+    ))
+    # Group /start remains unchanged; private /start is routed through the
+    # schedule conversation entry point so a signed deep link can start state.
+    application.add_handler(CommandHandler("start", start, filters=filters.ChatType.GROUPS))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("showdata", show_data))
+    application.add_handler(CommandHandler("cleardata", clear_data))
+    application.add_handler(CallbackQueryHandler(cleardata_callback, pattern=r'^cleardata_(confirm|cancel)$'))
+    application.add_handler(CommandHandler("form", report_form_command))
+    application.add_handler(CommandHandler("stats", stats))
+    application.add_handler(CommandHandler("listusers", list_users))
+    application.add_handler(CommandHandler("listgroups", list_groups))
+    application.add_handler(CommandHandler("listschedules", listschedules_command))
+    application.add_handler(CommandHandler("removeschedule", removeschedule_command))
+    application.add_handler(CommandHandler("admin", admin_command))
+    application.add_handler(CommandHandler("clearall", admin_clearall_command))
+    application.add_handler(CommandHandler("resetplusall", admin_resetplusall_command))
+    addbutton_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("addbutton", addbutton_command,
+                           filters=filters.ChatType.PRIVATE),
+        ],
+        states={
+            STARTBTN_AWAIT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND,
+                               addbutton_receive),
+            ],
+        },
+        fallbacks=[CommandHandler("cancel", addbutton_receive)],
+        allow_reentry=True,
+    )
+    application.add_handler(addbutton_handler)
+    application.add_handler(CommandHandler("removebutton", removebutton_command))
+    application.add_handler(CommandHandler("listbuttons", listbuttons_command))
+    application.add_handler(CallbackQueryHandler(removebutton_callback, pattern=r'^rmbtn_'))
+    application.add_handler(CommandHandler("guide", guide_command))
+    application.add_handler(CallbackQueryHandler(guide_callback, pattern=r'^guide_page_\d+$'))
+    application.add_handler(CommandHandler("deposit_total", deposit_total_command))
+    application.add_handler(CommandHandler("whatsapp_total", whatsapp_total_command))
+    application.add_handler(CommandHandler("total_plus", total_plus_command))
+    application.add_handler(CommandHandler("reset_plus", reset_plus_command))
+    application.add_handler(CallbackQueryHandler(resetplus_callback, pattern=r'^resetplus_(confirm|cancel)$'))
+    plus_reaction_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler(
+                "setplusreaction",
+                plus_reaction_start,
+                filters=filters.ChatType.PRIVATE,
+            ),
+        ],
+        states={
+            PLUS_REACTION_AWAIT: [
+                CommandHandler("reset", plus_reaction_receive),
+                CommandHandler("cancel", plus_reaction_cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, plus_reaction_receive),
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", plus_reaction_cancel),
+        ],
+        allow_reentry=True,
+        per_message=False,
+    )
+    application.add_handler(plus_reaction_handler)
+
+    application.add_handler(CallbackQueryHandler(clear_group_data_callback, pattern=r'^admin_clear_-?\d+$'))
+    application.add_handler(CallbackQueryHandler(cancel_group_action, pattern='^admin_cancel$'))
+    application.add_handler(CallbackQueryHandler(adminall_callback, pattern=r'^adminall_'))
+    bot_settings_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(bot_settings_menu, pattern='^adm_botsettings$')],
+        states={
+            BOT_SETTINGS_SELECT: [
+                CallbackQueryHandler(bot_settings_select, pattern='^admbs_(name|about|desc|photo)$'),
+                CallbackQueryHandler(bot_settings_cancel, pattern='^admbs_cancel$'),
+            ],
+            BOT_SETTINGS_AWAITING: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, bot_settings_apply),
+            ],
+            BOT_SETTINGS_PHOTO: [
+                MessageHandler(filters.PHOTO, bot_settings_photo_receive),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(bot_settings_cancel, pattern='^admbs_cancel$'),
+            CommandHandler('cancel', cancel_conversation),
+        ],
+        allow_reentry=True, per_message=False,
+    )
+    application.add_handler(bot_settings_handler)
+
+    application.add_handler(CallbackQueryHandler(admin_panel_callback, pattern='^adm_'))
+
+    schedule_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("start", schedule_start_entry, filters=filters.ChatType.PRIVATE),
+            CommandHandler("setschedule", setschedule_command, filters=filters.ChatType.GROUPS),
+        ],
+        states={
+            SCHEDULE_SET_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule_set_time)],
+            SCHEDULE_SET_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule_set_message)],
+            SCHEDULE_SELECT_TYPE: [CallbackQueryHandler(schedule_select_type, pattern=r'^sched_type_|^sched_cancel$')],
+        },
+        fallbacks=[
+            CallbackQueryHandler(schedule_cancel, pattern=r'^sched_cancel$'),
+            CommandHandler('cancel', schedule_cancel),
+        ],
+        allow_reentry=True,
+    )
+    application.add_handler(schedule_handler)
+    application.add_handler(CallbackQueryHandler(
+        schedule_pm_open_callback,
+        pattern=r'^schedule_pm_open_(?:set|remove)$',
+    ))
+    application.add_handler(CallbackQueryHandler(
+        schedule_remove_callback,
+        pattern=r'^sched_remove_(?:pick_[A-Za-z0-9_-]+|delete_[A-Za-z0-9_-]+|cancel)$',
+    ))
+
+    feedback_handler = ConversationHandler(
+        entry_points=[CommandHandler("feedback", start_feedback)],
+        states={FEEDBACK_AWAITING: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_feedback)]},
+        fallbacks=[CommandHandler('cancel', cancel_conversation)],
+        allow_reentry=True
+    )
+    application.add_handler(feedback_handler)
+
+    broadcast_handler = ConversationHandler(
+        entry_points=[CommandHandler("broadcast", broadcast_start, filters=filters.User(ADMIN_IDS))],
+        states={
+            BROADCAST_SELECT_CHAT: [CallbackQueryHandler(broadcast_select_chat, pattern='^bcast_id_')],
+            BROADCAST_AWAITING_MESSAGE: [MessageHandler(
+                (filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL |
+                 filters.AUDIO | filters.ANIMATION | filters.VOICE | filters.VIDEO_NOTE |
+                 filters.Sticker.ALL) & ~filters.COMMAND,
+                broadcast_await_message
+            )],
+            BROADCAST_CONFIRMATION: [CallbackQueryHandler(broadcast_confirm, pattern='^bcast_confirm$')]
+        },
+        fallbacks=[
+            CallbackQueryHandler(broadcast_cancel, pattern='^bcast_cancel$'),
+            CommandHandler('cancel', cancel_conversation)
+        ],
+        allow_reentry=True
+    )
+    application.add_handler(broadcast_handler)
+
+
+    application.add_handler(MessageHandler(filters.REPLY & filters.Regex(r'^\+$'), handle_plus_reply))
+    application.add_handler(MessageHandler(filters.REPLY & filters.Regex(r'^\-$'), handle_minus_reply))
+    application.add_handler(MessageHandler(filters.REPLY & filters.Regex(r'^(打枪|သာချန်း)$'), handle_daqiang_reply))
+
+    # Green alert — fires independently in group=3 so deposit/whatsapp handlers are unaffected
+    application.add_handler(MessageHandler(
+        (filters.TEXT | filters.CAPTION) & ~filters.COMMAND & filters.ChatType.GROUPS,
+        handle_green_report,
+    ), group=3)
+
+    application.add_handler(MessageHandler(
+        (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_deposit_report
+    ), group=1)
+    application.add_handler(MessageHandler(
+        (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_whatsapp_report
+    ), group=1)
+    application.add_handler(MessageHandler(
+        filters.UpdateType.EDITED_MESSAGE & (filters.TEXT | filters.CAPTION), handle_deposit_report_edit
+    ), group=1)
+    application.add_handler(MessageHandler(
+        filters.UpdateType.EDITED_MESSAGE & (filters.TEXT | filters.CAPTION), handle_whatsapp_report_edit
+    ), group=1)
+
+    application.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_pm_math
+    ), group=2)
+
+    application.add_handler(MessageHandler(
+        (filters.TEXT & ~filters.COMMAND) | filters.CAPTION, extract_and_save_data
+    ))
+
+    application.add_error_handler(error_handler)
+
+    application.run_polling(poll_interval=1.0, drop_pending_updates=True, timeout=30)
+
+
+if __name__ == '__main__':
+    keep_alive()
+    main()
+),
+            CommandHandler("cancel", setmsg_cancel_conv),
+        ],
+        allow_reentry=True,
+        per_message=False,
+    )
+    application.add_handler(setmsg_handler)
 
     application.add_handler(MessageHandler(
         filters.ALL,
@@ -5126,33 +5399,6 @@ def main():
     application.add_handler(bot_settings_handler)
 
     application.add_handler(CallbackQueryHandler(admin_panel_callback, pattern='^adm_'))
-
-    # /setmsg — owner-only message customiser
-    setmsg_handler = ConversationHandler(
-        entry_points=[CommandHandler("setmsg", setmsg_start, filters=filters.ChatType.PRIVATE)],
-        states={
-            SETMSG_SELECT: [
-                CallbackQueryHandler(setmsg_select, pattern=r'^setmsg_'),
-            ],
-            PLUS_REACTION_AWAIT: [
-                CommandHandler("reset", plus_reaction_receive),
-                CommandHandler("cancel", plus_reaction_cancel),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, plus_reaction_receive),
-            ],
-            SETMSG_AWAIT: [
-                CommandHandler("reset", setmsg_receive),
-                CommandHandler("cancel", setmsg_cancel_conv),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, setmsg_receive),
-            ],
-        },
-        fallbacks=[
-            CallbackQueryHandler(setmsg_cancel_conv, pattern=r'^setmsg_cancel$'),
-            CommandHandler("cancel", setmsg_cancel_conv),
-        ],
-        allow_reentry=True,
-        per_message=False,
-    )
-    application.add_handler(setmsg_handler)
 
     schedule_handler = ConversationHandler(
         entry_points=[
