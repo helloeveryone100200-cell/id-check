@@ -638,6 +638,28 @@ def _public_bot_commands() -> list[BotCommand]:
     ]
 
 
+def _admin_bot_commands() -> list[BotCommand]:
+    """Commands available in the configured owner's and admins' private menus."""
+    return _public_bot_commands() + [
+        BotCommand("setmsg", "Customize bot messages (Owner/Admin only)"),
+        BotCommand("stats", "Bot stats (Admin)"),
+        BotCommand("listusers", "User list (Admin)"),
+        BotCommand("listgroups", "Group list (Admin)"),
+        BotCommand("admin", "Admin panel (Admin)"),
+        BotCommand("clearall", "Clear all data (Admin PM)"),
+        BotCommand("resetplusall", "Reset all plus counters (Admin PM)"),
+    ]
+
+
+def _admin_command_menu_ids() -> list[int]:
+    """Return configured admins plus OWNER_ID, without duplicate menu writes."""
+    ids = {int(user_id) for user_id in ADMIN_IDS}
+    owner_id = os.getenv("OWNER_ID", "").strip()
+    if owner_id.isdigit():
+        ids.add(int(owner_id))
+    return sorted(ids)
+
+
 def _group_bot_commands(bot_data: dict) -> list[BotCommand]:
     def description(key: str) -> str:
         value = " ".join(get_msg(bot_data, key).split())[:256]
@@ -828,7 +850,17 @@ async def _edit_custom(query, bot_data: dict, key: str,
 
 async def setmsg_start(update: Update, context: CallbackContext) -> int:
     user = update.effective_user
+    chat = update.effective_chat
+    logging.info(
+        "Received /setmsg: user_id=%s chat_type=%s",
+        user.id if user else None,
+        chat.type if chat else None,
+    )
     if not user or not _is_owner_or_admin(user.id):
+        logging.warning(
+            "/setmsg denied: user_id=%s",
+            user.id if user else None,
+        )
         await update.message.reply_text("❌ Bot owner/admin သာ ဤ command ကို သုံးနိုင်သည်။")
         return ConversationHandler.END
     if update.effective_chat.type != "private":
@@ -4897,14 +4929,7 @@ async def post_init(application: Application) -> None:
         name='auto_clear_daily'
     )
     public_commands = _public_bot_commands()
-    admin_commands = public_commands + [
-        BotCommand("stats",          "Bot stats (Admin)"),
-        BotCommand("listusers",      "User list (Admin)"),
-        BotCommand("listgroups",     "Group list (Admin)"),
-        BotCommand("admin",          "Admin panel (Admin)"),
-        BotCommand("clearall",       "Data အားလုံး ရှင်း (Admin PM)"),
-        BotCommand("resetplusall",   "Plus counter အားလုံး reset (Admin PM)"),
-    ]
+    admin_commands = _admin_bot_commands()
 
     # Schedule commands are listed in group chats only, never in private chats.
     await application.bot.set_my_commands(public_commands)
@@ -4913,7 +4938,7 @@ async def post_init(application: Application) -> None:
     )
 
     # Each configured admin keeps the admin-only commands in their private menu.
-    for admin_id in ADMIN_IDS:
+    for admin_id in _admin_command_menu_ids():
         try:
             await application.bot.set_my_commands(
                 admin_commands,
@@ -4995,6 +5020,33 @@ def main():
         .pool_timeout(30.0)
         .build()
     )
+
+    # /setmsg — owner-only message customiser
+    setmsg_handler = ConversationHandler(
+        entry_points=[CommandHandler("setmsg", setmsg_start, filters=filters.ChatType.PRIVATE)],
+        states={
+            SETMSG_SELECT: [
+                CallbackQueryHandler(setmsg_select, pattern=r'^setmsg_'),
+            ],
+            PLUS_REACTION_AWAIT: [
+                CommandHandler("reset", plus_reaction_receive),
+                CommandHandler("cancel", plus_reaction_cancel),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, plus_reaction_receive),
+            ],
+            SETMSG_AWAIT: [
+                CommandHandler("reset", setmsg_receive),
+                CommandHandler("cancel", setmsg_cancel_conv),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, setmsg_receive),
+            ],
+        },
+        fallbacks=[
+            CallbackQueryHandler(setmsg_cancel_conv, pattern=r'^setmsg_cancel$'),
+            CommandHandler("cancel", setmsg_cancel_conv),
+        ],
+        allow_reentry=True,
+        per_message=False,
+    )
+    application.add_handler(setmsg_handler)
 
     application.add_handler(MessageHandler(
         filters.ALL,
@@ -5127,32 +5179,7 @@ def main():
 
     application.add_handler(CallbackQueryHandler(admin_panel_callback, pattern='^adm_'))
 
-    # /setmsg — owner-only message customiser
-    setmsg_handler = ConversationHandler(
-        entry_points=[CommandHandler("setmsg", setmsg_start, filters=filters.ChatType.PRIVATE)],
-        states={
-            SETMSG_SELECT: [
-                CallbackQueryHandler(setmsg_select, pattern=r'^setmsg_'),
-            ],
-            PLUS_REACTION_AWAIT: [
-                CommandHandler("reset", plus_reaction_receive),
-                CommandHandler("cancel", plus_reaction_cancel),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, plus_reaction_receive),
-            ],
-            SETMSG_AWAIT: [
-                CommandHandler("reset", setmsg_receive),
-                CommandHandler("cancel", setmsg_cancel_conv),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, setmsg_receive),
-            ],
-        },
-        fallbacks=[
-            CallbackQueryHandler(setmsg_cancel_conv, pattern=r'^setmsg_cancel$'),
-            CommandHandler("cancel", setmsg_cancel_conv),
-        ],
-        allow_reentry=True,
-        per_message=False,
-    )
-    application.add_handler(setmsg_handler)
+
 
     schedule_handler = ConversationHandler(
         entry_points=[
