@@ -4637,30 +4637,35 @@ def main():
         & filters.ChatType.PRIVATE,
         number_words_start,
     ))
-    # The filters read current /setmsg labels and retain aliases for already-shown keyboards.
-    schedule_set_button_filter = filters.create(
-        lambda message: bool(
-            message.text
-            and _normalize_schedule_keyboard_text(message.text) in
-            _schedule_keyboard_labels(application.bot_data, "schedule_set_button")
-        )
-    ) & filters.ChatType.GROUPS
+    # Dynamic filters use the supported PTB MessageFilter subclass API. They
+    # read current /setmsg labels and retain aliases for already-shown keyboards.
+    class _ScheduleSetButtonFilter(filters.MessageFilter):
+        def filter(self, message):
+            return bool(
+                message.text
+                and _normalize_schedule_keyboard_text(message.text) in
+                _schedule_keyboard_labels(application.bot_data, "schedule_set_button")
+            )
 
-    def _matches_schedule_remove_action(message):
-        if not message or not message.text or not message.from_user or not message.chat:
-            return False
-        text = message.text.strip()
-        if text in _schedule_keyboard_labels(application.bot_data, "schedule_remove_button"):
-            return True
-        chat_state = application.chat_data.get(message.chat.id, {})
-        menu = chat_state.get("schedule_remove_menu", {})
-        if str(menu.get("chat_id")) != str(message.chat.id):
-            return False
-        return text == menu.get("cancel_label") or text in menu.get("options", {})
+    class _ScheduleRemoveActionFilter(filters.MessageFilter):
+        def filter(self, message):
+            if not message or not message.text or not message.from_user or not message.chat:
+                return False
+            text = message.text.strip()
+            if text in _schedule_keyboard_labels(application.bot_data, "schedule_remove_button"):
+                return True
+            chat_state = application.chat_data.get(message.chat.id, {})
+            menu = chat_state.get("schedule_remove_menu", {})
+            if str(menu.get("chat_id")) != str(message.chat.id):
+                return False
+            return text == menu.get("cancel_label") or text in menu.get("options", {})
 
-    schedule_remove_action_filter = filters.create(
-        _matches_schedule_remove_action
-    ) & filters.ChatType.GROUPS
+    schedule_set_button_filter = (
+        _ScheduleSetButtonFilter() & filters.ChatType.GROUPS
+    )
+    schedule_remove_action_filter = (
+        _ScheduleRemoveActionFilter() & filters.ChatType.GROUPS
+    )
     application.add_handler(MessageHandler(
         schedule_remove_action_filter,
         schedule_remove_text_handler,
