@@ -93,6 +93,8 @@ CUSTOM_MSG_LABELS = {
     # Group-specific schedule system
     "schedule_set_button": "⏰ Set Schedule — Group reply-keyboard button",
     "schedule_remove_button": "🗑️ Remove Schedule — Group reply-keyboard button",
+    "schedule_button_invalid": "❌ Schedule button label must be one line with 1–64 characters",
+    "schedule_button_duplicate": "❌ Set Schedule နှင့် Remove Schedule button အမည်များ မတူညီရပါ။",
     "schedule_group_only": "🔒 Schedule unavailable in private chat",
     "schedule_admin_only": "🔒 Schedule permission denied — Group Owner/Admin only",
     "schedule_time_prompt": "⏰ Schedule time prompt (HH:MM)",
@@ -194,6 +196,8 @@ DEFAULT_MSGS: dict = {
     # Group-specific schedule system. All user-facing text is configurable in /setmsg.
     "schedule_set_button": "⏰ Set Schedule",
     "schedule_remove_button": "🗑️ Remove Schedule",
+    "schedule_button_invalid": "❌ Button အမည်ကို တစ်ကြောင်းတည်းဖြင့် စာလုံး 1–64 လုံးအတွင်း ထည့်ပါ။",
+    "schedule_button_duplicate": "❌ Set Schedule နှင့် Remove Schedule button အမည်များ မတူညီရပါ။",
     "schedule_group_only": "❌ Schedule စနစ်ကို Group ထဲတွင်သာ အသုံးပြုနိုင်ပါသည်။",
     "schedule_admin_only": "❌ ဤလုပ်ဆောင်ချက်ကို Group Owner or Admins သာ အသုံးပြုနိုင်ပါသည်။",
     "schedule_time_prompt": "⏰ Schedule time ကို HH:MM ပုံစံဖြင့် ရိုက်ပါ (Yangon time):\nဥပမာ: 09:30\n\n(/cancel ဖြင့် ရပ်)",
@@ -1003,6 +1007,30 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
         ):
             await msg.reply_text(
                 "❌ Button text သည် တစ်ကြောင်းတည်းဖြစ်ရမည်၊ 1–64 characters အတွင်း ရှိရမည်။"
+            )
+            return SETMSG_AWAIT
+
+    if key in {"schedule_set_button", "schedule_remove_button"} and text.strip() != "/reset":
+        if (
+            not text.strip()
+            or len(text) > 64
+            or "\n" in text
+            or "\r" in text
+        ):
+            await _reply_custom(
+                msg, context.application.bot_data, "schedule_button_invalid"
+            )
+            return SETMSG_AWAIT
+
+        other_key = (
+            "schedule_remove_button"
+            if key == "schedule_set_button"
+            else "schedule_set_button"
+        )
+        candidate = _normalize_schedule_keyboard_text(text)
+        if candidate in _schedule_keyboard_labels(context.application.bot_data, other_key):
+            await _reply_custom(
+                msg, context.application.bot_data, "schedule_button_duplicate"
             )
             return SETMSG_AWAIT
 
