@@ -89,6 +89,7 @@ jobs:
                   )],
               ),
           )
+          command_update.set_bot(registered_app.bot)
           assert setmsg_handler.check_update(command_update) is not None
 
           # The owner must receive /setmsg in their private command menu even
