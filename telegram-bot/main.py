@@ -78,12 +78,16 @@ CUSTOM_MSG_LABELS = {
     "form":             "📋 /form — Full report template",
     "cleardata_ok":     "✅ /cleardata — Data deleted message",
     "cleardata_empty":  "📭 /cleardata — No data message",
+    "cleardata_confirm":"⚠️ /cleardata — Confirmation prompt ({today} သုံးနိုင်)",
     "showdata_empty":   "📭 /showdata — No data message",
     "showdata_footer":  "💬 /showdata — Footer hint",
     "total_plus_empty": "📊 /total_plus — No data message",
     "total_plus_footer":"💬 /total_plus — Footer hint",
     "reset_plus_empty": "📊 /reset_plus — No counter message",
     "reset_plus_ok":    "✅ /reset_plus — Reset success message",
+    "reset_plus_confirm":"⚠️ /reset_plus — Confirmation prompt ({count} သုံးနိုင်)",
+    "confirm_button":   "✅ Confirmation — Confirm button text",
+    "cancel_button":    "❌ Confirmation — Cancel button text",
     "plus_reaction":    "⚙️ Plus counter reaction",
     "plus_fmt":         "➕ Plus count format  ({count} သုံးပါ)",
     "digit_emoji":      "🔢 Animated number emoji (0→9 အစဉ်လိုက်)",
@@ -133,12 +137,16 @@ DEFAULT_MSGS: dict = {
     "form":              "📋 Deposit Report Form Template\n\nကော်ပီကူးယူ၍ ဖြည့်စွက်ပြီး ပို့ပေးပါ:\n\n",
     "cleardata_ok":      "✅ Data deleted for today ({today}).\n✅ Plus counter reset ပြုလုပ်ပြီးပါပြီ။",
     "cleardata_empty":   "No data found for today ({today}).",
+    "cleardata_confirm": "⚠️ <b>ယနေ့ ({today}) data နှင့် Plus counter ကို ရှင်းလင်းမည်။</b>\n\nဆက်လုပ်မည်လား?",
     "showdata_empty":    "No data collected yet for today ({today}) in this chat.",
     "showdata_footer":   "{mention} report ပြင်ဆင်ပြီးပါက /cleardata နှိပ်ပါ။",
     "total_plus_empty":  "📊 ဤ chat တွင် (+) reply မရှိသေးပါ။",
     "total_plus_footer": "{mention} အလုပ်ဆင်းမည်ဆိုပါက /reset_plus နှိပ်ခဲ့ပါ",
     "reset_plus_empty":  "📊 ဤ chat တွင် ရှင်လင်းစရာ Plus counter မရှိသေးပါ။",
     "reset_plus_ok":     "✅ Plus counter reset ပြုလုပ်ပြီးပါပြီ။\n🗑️ ဤ chat ရှိ အဖွဲ့ဝင် {count} ဦး၏ ကောင်တာများ ပြန်လည်သုညမှ စတင်ပြီ။",
+    "reset_plus_confirm":"⚠️ ဤ chat ၏ Plus counter ({count} ဦး) ကို reset လုပ်မည်။\n\nဆက်လုပ်မည်လား?",
+    "confirm_button":   "✅ Confirm",
+    "cancel_button":    "❌ Cancel",
     "plus_fmt":          "+{count}",
     "digit_emoji":       "",   # empty = use plain digits
     # Plus / minus reply messages
@@ -487,6 +495,20 @@ def get_msg(bot_data: dict, key: str, **fmt) -> str:
     return _safe_substitute(text, **fmt) if fmt else text
 
 
+def _confirmation_button(bot_data: dict, key: str, callback_data: str,
+                         style: str) -> InlineKeyboardButton:
+    """Build a customisable confirmation button with optional custom emoji icon."""
+    label = get_msg(bot_data, key)
+    kwargs = {"callback_data": callback_data, "style": style}
+    custom_emoji_id = _get_first_custom_emoji_id(bot_data, key)
+    if custom_emoji_id:
+        kwargs["icon_custom_emoji_id"] = custom_emoji_id
+        prefix = {"confirm_button": "✅ ", "cancel_button": "❌ "}.get(key, "")
+        if prefix and label.startswith(prefix):
+            label = label[len(prefix):]
+    return InlineKeyboardButton(label, **kwargs)
+
+
 def _get_form_message_payload(bot_data: dict) -> tuple[str, list | None]:
     """Return the complete /form message and its stored Telegram entities.
 
@@ -714,6 +736,18 @@ async def setmsg_select(update: Update, context: CallbackContext) -> int:
         current = stored.get("text") or DEFAULT_MSGS.get(key, "(default)")
         current_entities = stored.get("entities")
 
+    if key in {"confirm_button", "cancel_button"}:
+        await query.edit_message_text(
+            f"🔘 <b>{label}</b>\\n\\n"
+            f"<b>လက်ရှိ button text:</b>\\n"
+            f"<blockquote>{html_escape(current[:800])}</blockquote>\\n\\n"
+            "✏️ Button text အသစ်ကို တစ်ကြောင်းတည်း ပို့ပါ (1–64 characters)။\\n\\n"
+            "<i>/reset — default ပြန်ထား</i>\\n"
+            "<i>/cancel — မပြောင်းဘဲ ထွက်မည်</i>",
+            parse_mode="HTML",
+        )
+        return SETMSG_AWAIT
+
     if key == "digit_emoji":
         digit_map = _get_digit_map(context.application.bot_data)
         if digit_map:
@@ -787,6 +821,18 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
     if not key:
         await msg.reply_text("❌ Session expired. /setmsg ထပ်စမ်းပါ။")
         return ConversationHandler.END
+
+    if key in {"confirm_button", "cancel_button"}:
+        if (
+            not text.strip()
+            or len(text) > 64
+            or "\\n" in text
+            or "\\r" in text
+        ):
+            await msg.reply_text(
+                "❌ Button text သည် တစ်ကြောင်းတည်းဖြစ်ရမည်၊ 1–64 characters အတွင်း ရှိရမည်။"
+            )
+            return SETMSG_AWAIT
 
     if text.strip() == "/reset":
         custom = _get_custom_msgs(context.application.bot_data)
@@ -2037,23 +2083,22 @@ async def clear_data(update: Update, context: CallbackContext) -> None:
                             "cleardata_empty", today=today_key)
         return
 
+    bot_data = context.application.bot_data
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(
-            "✅ Confirm",
-            callback_data="cleardata_confirm",
-            style="success",
+        _confirmation_button(
+            bot_data, "confirm_button", "cleardata_confirm", "success"
         ),
-        InlineKeyboardButton(
-            "❌ Cancel",
-            callback_data="cleardata_cancel",
-            style="danger",
+        _confirmation_button(
+            bot_data, "cancel_button", "cleardata_cancel", "danger"
         ),
     ]])
-    await message.reply_text(
-        f"⚠️ <b>ယနေ့ ({today_key}) data နှင့် Plus counter ကို ရှင်းလင်းမည်။</b>\n\n"
-        "ဆက်လုပ်မည်လား?",
-        parse_mode='HTML',
+    await _reply_custom(
+        message,
+        bot_data,
+        "cleardata_confirm",
+        parse_mode="HTML",
         reply_markup=keyboard,
+        today=today_key,
     )
 
 
@@ -3687,22 +3732,21 @@ async def reset_plus_command(update: Update, context: CallbackContext) -> None:
         await _reply_custom(message, context.application.bot_data, "reset_plus_empty")
         return
 
+    bot_data = context.application.bot_data
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(
-            "✅ Confirm",
-            callback_data="resetplus_confirm",
-            style="success",
+        _confirmation_button(
+            bot_data, "confirm_button", "resetplus_confirm", "success"
         ),
-        InlineKeyboardButton(
-            "❌ Cancel",
-            callback_data="resetplus_cancel",
-            style="danger",
+        _confirmation_button(
+            bot_data, "cancel_button", "resetplus_cancel", "danger"
         ),
     ]])
-    await message.reply_text(
-        f"⚠️ ဤ chat ၏ Plus counter ({len(keys_to_del)} ဦး) ကို reset လုပ်မည်။\n\n"
-        "ဆက်လုပ်မည်လား?",
+    await _reply_custom(
+        message,
+        bot_data,
+        "reset_plus_confirm",
         reply_markup=keyboard,
+        count=len(keys_to_del),
     )
 
 
