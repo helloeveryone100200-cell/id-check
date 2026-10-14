@@ -63,6 +63,10 @@ jobs:
 
           assert len(registered_applications) == 1
           registered_app = registered_applications[0]
+          # CommandHandler validates the bot username; avoid a network initialize call in CI.
+          registered_app.bot._bot = User(
+              id=999999, first_name="Smoke Test Bot", is_bot=True, username="smoke_test_bot"
+          )
           setmsg_handler = next(
               handler
               for handler in registered_app.handlers.get(0, [])
