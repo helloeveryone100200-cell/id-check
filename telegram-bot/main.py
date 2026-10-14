@@ -3844,11 +3844,8 @@ async def schedule_remove_callback(update: Update, context: CallbackContext) -> 
     await query.answer()
     bot_data = context.application.bot_data
 
+    # Unauthorized clicks must not remove the confirmation keyboard for admins.
     if not await _require_group_schedule_admin(update, context):
-        try:
-            await query.edit_message_reply_markup(reply_markup=None)
-        except Exception:
-            pass
         return
 
     chat = update.effective_chat
