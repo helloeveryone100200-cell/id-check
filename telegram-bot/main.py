@@ -93,6 +93,14 @@ CUSTOM_MSG_LABELS = {
     "confirm_button":   "✅ Confirmation — Confirm button text",
     "cancel_button":    "❌ Confirmation — Cancel button text",
     "owner_only_action_denied": "🔒 Owner-only actions — Access denied message",
+    # Customizable reply-keyboard buttons
+    "showdata_button": "📊 Showdata — Reply Keyboard button",
+    "total_plus_button": "🔢 Total Plus — Reply Keyboard button",
+    "clear_data_button": "🗑️ Clear Data — Reply Keyboard button",
+    "reset_plus_button": "🔄 Reset Plus — Reply Keyboard button",
+    "clear_all_button": "🧹 Clear All — Reply Keyboard button",
+    "reset_plus_all_button": "🔒 Reset Plus All — Reply Keyboard button",
+    "number_words_button": "🔢 Number to Words Converter — Reply Keyboard button",
     # Group-specific schedule system
     "schedule_menu_button": "📅 Schedule — Group reply-keyboard button",
     "schedule_management_message": "📅 Schedule Management — Group menu message",
@@ -101,7 +109,7 @@ CUSTOM_MSG_LABELS = {
     "schedule_set_button": "⏰ Set Schedule — Inline keyboard button",
     "schedule_remove_button": "🗑️ Remove Schedule — Inline keyboard button",
     "schedule_button_invalid": "❌ Schedule button label must be one line with 1–64 characters",
-    "schedule_button_duplicate": "❌ Schedule, Set Schedule နှင့် Remove Schedule button အမည်များ မတူညီရပါ။",
+    "schedule_button_duplicate": "❌ Reply Keyboard နှင့် Schedule button အမည်များ မတူညီရပါ။",
     "schedule_group_only": "🔒 Schedule unavailable in private chat",
     "schedule_admin_only": "🔒 Schedule permission denied — Group Owner/Admin only",
     "schedule_time_prompt": "⏰ Schedule time prompt (HH:MM)",
@@ -200,6 +208,16 @@ DEFAULT_MSGS: dict = {
     "confirm_button":   "✅ Confirm",
     "cancel_button":    "❌ Cancel",
     "owner_only_action_denied": "❌ ဤလုပ်ဆောင်ချက်ကို Bot Owner သာ အသုံးပြုနိုင်ပါသည်။",
+    # Reply-keyboard labels (rendered as plain text if no custom emoji is configured)
+    "showdata_button": "Showdata",
+    "total_plus_button": "Total Plus",
+    "clear_data_button": "Clear Data",
+    "reset_plus_button": "Reset Plus",
+    "clear_all_button": "Clear All",
+    "reset_plus_all_button": "Reset Plus All",
+    "number_words_button": "Numbers to Words Converter",
+    "reply_button_invalid": "❌ Button အမည်ကို တစ်ကြောင်းတည်းဖြင့် စာလုံး 1–64 လုံးအတွင်း ထည့်ပါ။",
+    "reply_button_duplicate": "❌ Reply Keyboard နှင့် Schedule button အမည်များ မတူညီရပါ။",
     # Group-specific schedule system. All user-facing text is configurable in /setmsg.
     "schedule_menu_button": "Schedule",
     "schedule_management_message": "📅 Schedule Management\nManage this group's schedules privately with the bot.",
@@ -407,12 +425,22 @@ _SCHEDULE_ACTION_BUTTON_KEYS = {
     "schedule_set_button",
     "schedule_remove_button",
 }
+_REPLY_KEYBOARD_BUTTON_KEYS = {
+    "showdata_button",
+    "total_plus_button",
+    "clear_data_button",
+    "reset_plus_button",
+    "clear_all_button",
+    "reset_plus_all_button",
+    "number_words_button",
+}
+_CUSTOM_KEYBOARD_BUTTON_KEYS = _SCHEDULE_ACTION_BUTTON_KEYS | _REPLY_KEYBOARD_BUTTON_KEYS
 
 
 def _schedule_keyboard_label(bot_data: dict, key: str) -> str:
     """Get a bounded schedule button label, excluding a custom emoji rendered as an icon."""
     label = get_msg(bot_data, key)
-    if key in _SCHEDULE_ACTION_BUTTON_KEYS:
+    if key in _CUSTOM_KEYBOARD_BUTTON_KEYS:
         stored = _get_custom_msgs(bot_data).get(key, {})
         entity, custom_emoji_id = _first_custom_emoji_entity(
             stored.get("entities") or []
@@ -434,7 +462,7 @@ def _schedule_keyboard_button(
     kwargs = {}
     if style:
         kwargs["style"] = style
-    if key in _SCHEDULE_ACTION_BUTTON_KEYS:
+    if key in _CUSTOM_KEYBOARD_BUTTON_KEYS:
         custom_emoji_id = _get_first_custom_emoji_id(bot_data, key)
         if custom_emoji_id:
             kwargs["icon_custom_emoji_id"] = custom_emoji_id
@@ -1220,34 +1248,50 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
             )
             return SETMSG_AWAIT
 
-    if key in {"schedule_menu_button", "schedule_set_button", "schedule_remove_button"} and text.strip() != "/reset":
+    if key in _CUSTOM_KEYBOARD_BUTTON_KEYS and text.strip() != "/reset":
         if (
             not text.strip()
             or len(text) > 64
             or "\n" in text
             or "\r" in text
         ):
-            await _reply_custom(
-                msg, context.application.bot_data, "schedule_button_invalid"
+            error_key = (
+                "schedule_button_invalid"
+                if key in _SCHEDULE_ACTION_BUTTON_KEYS
+                else "reply_button_invalid"
             )
+            await _reply_custom(msg, context.application.bot_data, error_key)
             return SETMSG_AWAIT
 
-        candidate = _normalize_schedule_keyboard_text(text)
-        other_keys = {
-            "schedule_menu_button", "schedule_set_button", "schedule_remove_button"
-        } - {key}
+        candidate = text
+        candidate_entities = [
+            entity.to_dict() for entity in (msg.entities or [])
+        ]
+        candidate_entity, candidate_emoji_id = _first_custom_emoji_entity(
+            candidate_entities
+        )
+        if candidate_entity and candidate_emoji_id:
+            candidate = _remove_entity_from_text(candidate, candidate_entity)
+        candidate = _normalize_schedule_keyboard_text(candidate)
+
+        other_keys = _CUSTOM_KEYBOARD_BUTTON_KEYS - {key}
         if any(
-            candidate in _schedule_keyboard_labels(context.application.bot_data, other_key)
+            candidate in _schedule_keyboard_labels(
+                context.application.bot_data, other_key
+            )
             for other_key in other_keys
         ):
-            await _reply_custom(
-                msg, context.application.bot_data, "schedule_button_duplicate"
+            error_key = (
+                "schedule_button_duplicate"
+                if key in _SCHEDULE_ACTION_BUTTON_KEYS
+                else "reply_button_duplicate"
             )
+            await _reply_custom(msg, context.application.bot_data, error_key)
             return SETMSG_AWAIT
 
     if text.strip() == "/reset":
         custom = _get_custom_msgs(context.application.bot_data)
-        if key in {"schedule_menu_button", "schedule_set_button", "schedule_remove_button"}:
+        if key in _CUSTOM_KEYBOARD_BUTTON_KEYS:
             _remember_schedule_button_alias(context.application.bot_data, key)
         if key == "number_words_link":
             context.application.bot_data.pop("number_words_link", None)
@@ -1309,7 +1353,7 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
             entities_raw = None
 
     custom = _get_custom_msgs(context.application.bot_data)
-    if key in {"schedule_menu_button", "schedule_set_button", "schedule_remove_button"}:
+    if key in _CUSTOM_KEYBOARD_BUTTON_KEYS:
         _remember_schedule_button_alias(context.application.bot_data, key)
     message_config = {"text": text, "entities": entities_raw}
     if key == "form":
@@ -2219,16 +2263,16 @@ def _main_reply_keyboard(bot_data: dict, include_schedule: bool = False) -> Repl
     """Build the persistent keyboard; schedule controls are group-only."""
     rows = [
         [
-            KeyboardButton("Showdata", style="primary"),
-            KeyboardButton("Total Plus", style="primary"),
+            _schedule_keyboard_button(bot_data, "showdata_button", style="primary"),
+            _schedule_keyboard_button(bot_data, "total_plus_button", style="primary"),
         ],
         [
-            KeyboardButton("Clear Data", style="danger"),
-            KeyboardButton("Reset Plus", style="danger"),
+            _schedule_keyboard_button(bot_data, "clear_data_button", style="danger"),
+            _schedule_keyboard_button(bot_data, "reset_plus_button", style="danger"),
         ],
         [
-            KeyboardButton("Clear All", style="success"),
-            KeyboardButton("Reset Plus All", style="success"),
+            _schedule_keyboard_button(bot_data, "clear_all_button", style="success"),
+            _schedule_keyboard_button(bot_data, "reset_plus_all_button", style="success"),
         ],
     ]
     if include_schedule:
@@ -2239,7 +2283,13 @@ def _main_reply_keyboard(bot_data: dict, include_schedule: bool = False) -> Repl
                 style="primary",
             ),
         ])
-    rows.append([KeyboardButton(NUMBER_WORDS_BUTTON, style="primary")])
+    rows.append([
+        _schedule_keyboard_button(
+            bot_data,
+            "number_words_button",
+            style="primary",
+        )
+    ])
     return ReplyKeyboardMarkup(
         rows,
         resize_keyboard=True,
@@ -2338,18 +2388,21 @@ async def number_words_start(update: Update, context: CallbackContext) -> int:
 
 
 async def main_menu_text_handler(update: Update, context: CallbackContext) -> None:
-    """Handle the human-readable labels sent by the reply keyboard."""
+    """Route current and legacy customizable reply-keyboard labels to their original actions."""
     handlers = {
-        "Showdata": show_data,
-        "Total Plus": total_plus_command,
-        "Clear Data": clear_data,
-        "Reset Plus": reset_plus_command,
-        "Clear All": admin_clearall_command,
-        "Reset Plus All": admin_resetplusall_command,
+        "showdata_button": show_data,
+        "total_plus_button": total_plus_command,
+        "clear_data_button": clear_data,
+        "reset_plus_button": reset_plus_command,
+        "clear_all_button": admin_clearall_command,
+        "reset_plus_all_button": admin_resetplusall_command,
     }
-    handler = handlers.get((update.message.text or "").strip())
-    if handler:
-        await handler(update, context)
+    text = _normalize_schedule_keyboard_text(update.message.text or "")
+    bot_data = context.application.bot_data
+    for key, handler in handlers.items():
+        if text in _schedule_keyboard_labels(bot_data, key):
+            await handler(update, context)
+            return
 
 
 # ============================================================
@@ -5275,10 +5328,17 @@ def main():
         ensure_reply_keyboard,
     ), group=-1)
     application.add_handler(CommandHandler("menu", main_menu_command))
+    class _NumberWordsButtonFilter(filters.MessageFilter):
+        def filter(self, message):
+            if not message or not message.text:
+                return False
+            label = _normalize_schedule_keyboard_text(message.text)
+            return label in _schedule_keyboard_labels(
+                application.bot_data, "number_words_button"
+            )
+
     application.add_handler(MessageHandler(
-        filters.TEXT
-        & filters.Regex(r"^Numbers to Words Converter$")
-        & filters.ChatType.PRIVATE,
+        _NumberWordsButtonFilter() & filters.ChatType.PRIVATE,
         number_words_start,
     ))
     # Dynamic filters use the supported PTB MessageFilter subclass API. They
@@ -5304,10 +5364,19 @@ def main():
         schedule_menu_button_filter,
         schedule_management_menu,
     ))
+    class _MainMenuButtonFilter(filters.MessageFilter):
+        def filter(self, message):
+            if not message or not message.text:
+                return False
+            label = _normalize_schedule_keyboard_text(message.text)
+            return any(
+                label in _schedule_keyboard_labels(application.bot_data, key)
+                for key in _REPLY_KEYBOARD_BUTTON_KEYS
+                if key != "number_words_button"
+            )
+
     application.add_handler(MessageHandler(
-        filters.TEXT & filters.Regex(
-            r'^(Showdata|Total Plus|Clear Data|Reset Plus|Clear All|Reset Plus All)$'
-        ),
+        _MainMenuButtonFilter(),
         main_menu_text_handler,
     ))
     # Group /start remains unchanged; private /start is routed through the
