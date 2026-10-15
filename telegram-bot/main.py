@@ -60,6 +60,7 @@ BOT_SETTINGS_PHOTO    = 42
 
 SETMSG_SELECT = 60
 SETMSG_AWAIT  = 61
+SETMSG_MENU_PAGE_SIZE = 8
 STARTBTN_AWAIT = 70
 PLUS_REACTION_AWAIT = 80
 
@@ -849,6 +850,125 @@ async def _edit_custom(query, bot_data: dict, key: str,
 
 # ─── /setmsg conversation handlers ───────────────────────────────────────────
 
+def _setmsg_menu_keyboard(
+    bot_data: dict,
+    user_id: int,
+    page: int = 0,
+    *,
+    include_custom_emoji: bool = True,
+) -> tuple[InlineKeyboardMarkup, bool, int, int]:
+    """Build one compact /setmsg page so custom-emoji icons fit Telegram limits."""
+    labels = list(
+        CUSTOM_MSG_LABELS.items()
+        if _is_owner(user_id)
+        else [("plus_reaction", CUSTOM_MSG_LABELS["plus_reaction"])]
+    )
+    page_count = max(1, math.ceil(len(labels) / SETMSG_MENU_PAGE_SIZE))
+    page = max(0, min(page, page_count - 1))
+    start = page * SETMSG_MENU_PAGE_SIZE
+    visible_labels = labels[start:start + SETMSG_MENU_PAGE_SIZE]
+    keyboard = []
+    plain_keyboard = []
+    has_custom_emoji_icons = False
+
+    for key, label in visible_labels:
+        custom_emoji_id = (
+            _get_first_custom_emoji_id(bot_data, key)
+            if include_custom_emoji
+            else None
+        )
+        button_label = label
+        callback_data = f"setmsg_{key}"
+        button_kwargs = {"callback_data": callback_data}
+        if custom_emoji_id:
+            button_kwargs["icon_custom_emoji_id"] = custom_emoji_id
+            has_custom_emoji_icons = True
+            if button_label.startswith("✅ "):
+                button_label = button_label[2:]
+
+        keyboard.append([InlineKeyboardButton(button_label, **button_kwargs)])
+        plain_keyboard.append([
+            InlineKeyboardButton(label, callback_data=callback_data)
+        ])
+
+    if page_count > 1:
+        navigation = []
+        if page > 0:
+            navigation.append(
+                InlineKeyboardButton(
+                    "◀️ Previous",
+                    callback_data=f"setmsg_page_{page - 1}",
+                )
+            )
+        if page < page_count - 1:
+            navigation.append(
+                InlineKeyboardButton(
+                    "Next ▶️",
+                    callback_data=f"setmsg_page_{page + 1}",
+                )
+            )
+        keyboard.append(navigation)
+        plain_keyboard.append(navigation)
+
+    cancel_button = InlineKeyboardButton("❌ Cancel", callback_data="setmsg_cancel")
+    keyboard.append([cancel_button])
+    plain_keyboard.append([cancel_button])
+    return (
+        InlineKeyboardMarkup(keyboard),
+        has_custom_emoji_icons,
+        page,
+        page_count,
+    )
+
+
+def _setmsg_menu_prompt(page: int, page_count: int) -> str:
+    prompt = "✏️ ပြောင်းလဲလိုသော message ကို ရွေးပါ:"
+    if page_count > 1:
+        prompt += f" (Page {page + 1}/{page_count})"
+    return prompt
+
+
+async def _send_setmsg_menu(
+    target_message,
+    bot_data: dict,
+    user_id: int,
+    page: int = 0,
+    *,
+    edit: bool = False,
+) -> None:
+    """Render one menu page, with a page-local plain-text fallback if needed."""
+    markup, has_icons, page, page_count = _setmsg_menu_keyboard(
+        bot_data, user_id, page
+    )
+    prompt = _setmsg_menu_prompt(page, page_count)
+    try:
+        if edit:
+            await target_message.edit_message_text(prompt, reply_markup=markup)
+        else:
+            await target_message.reply_text(prompt, reply_markup=markup)
+    except BadRequest as exc:
+        if not has_icons:
+            raise
+        logging.warning(
+            "Telegram rejected custom emoji icons in /setmsg page %s/%s; "
+            "retrying this page without icons: %s",
+            page + 1,
+            page_count,
+            exc,
+        )
+        plain_markup, _, _, _ = _setmsg_menu_keyboard(
+            bot_data, user_id, page, include_custom_emoji=False
+        )
+        if edit:
+            await target_message.edit_message_text(
+                prompt, reply_markup=plain_markup
+            )
+        else:
+            await target_message.reply_text(
+                prompt, reply_markup=plain_markup
+            )
+
+
 async def setmsg_start(update: Update, context: CallbackContext) -> int:
     user = update.effective_user
     chat = update.effective_chat
@@ -868,58 +988,34 @@ async def setmsg_start(update: Update, context: CallbackContext) -> int:
         await update.message.reply_text("❌ Bot PM ထဲတွင်သာ အသုံးပြုနိုင်သည်။")
         return ConversationHandler.END
 
-    keyboard = []
-    plain_keyboard = []
-    has_custom_emoji_icons = False
-    labels = (
-        CUSTOM_MSG_LABELS.items()
-        if _is_owner(user.id)
-        else [("plus_reaction", CUSTOM_MSG_LABELS["plus_reaction"])]
+    await _send_setmsg_menu(
+        update.message,
+        context.application.bot_data,
+        user.id,
     )
-    for key, label in labels:
-        custom_emoji_id = _get_first_custom_emoji_id(
-            context.application.bot_data, key
-        )
-        button_label = label
-        callback_data = f"setmsg_{key}"
-        button_kwargs = {"callback_data": callback_data}
+    return SETMSG_SELECT
 
-        # Retain custom-emoji decoration where Telegram permits it, but build
-        # a plain-text fallback because Telegram restricts emoji icons on bot
-        # buttons depending on the bot owner's Premium/username eligibility.
-        if custom_emoji_id:
-            button_kwargs["icon_custom_emoji_id"] = custom_emoji_id
-            has_custom_emoji_icons = True
-            if button_label.startswith("✅ "):
-                button_label = button_label[2:]
 
-        keyboard.append([InlineKeyboardButton(button_label, **button_kwargs)])
-        # Keep the original label if the fallback removes the custom icon.
-        plain_keyboard.append([
-            InlineKeyboardButton(label, callback_data=callback_data)
-        ])
+async def setmsg_page(update: Update, context: CallbackContext) -> int:
+    query = update.callback_query
+    await query.answer()
+    user = update.effective_user
+    if not user or not _is_owner_or_admin(user.id):
+        await query.edit_message_text("❌ Bot owner/admin သာ ဤ command ကို သုံးနိုင်သည်။")
+        return ConversationHandler.END
 
-    cancel_button = InlineKeyboardButton("❌ Cancel", callback_data="setmsg_cancel")
-    keyboard.append([cancel_button])
-    plain_keyboard.append([cancel_button])
-    prompt = "✏️ ပြောင်းလဲလိုသော message ကို ရွေးပါ:"
-    try:
-        await update.message.reply_text(
-            prompt,
-            reply_markup=InlineKeyboardMarkup(keyboard),
-        )
-    except BadRequest as exc:
-        if not has_custom_emoji_icons:
-            raise
-        logging.warning(
-            "Telegram rejected custom emoji icons in /setmsg menu; "
-            "retrying without icons: %s",
-            exc,
-        )
-        await update.message.reply_text(
-            prompt,
-            reply_markup=InlineKeyboardMarkup(plain_keyboard),
-        )
+    match = re.fullmatch(r"setmsg_page_(\d+)", query.data or "")
+    if not match:
+        await query.edit_message_text("❌ Invalid page selection.")
+        return ConversationHandler.END
+
+    await _send_setmsg_menu(
+        query,
+        context.application.bot_data,
+        user.id,
+        int(match.group(1)),
+        edit=True,
+    )
     return SETMSG_SELECT
 
 
@@ -5052,7 +5148,10 @@ def main():
         entry_points=[CommandHandler("setmsg", setmsg_start, filters=filters.ChatType.PRIVATE)],
         states={
             SETMSG_SELECT: [
-                CallbackQueryHandler(setmsg_select, pattern=r'^setmsg_'),
+                CallbackQueryHandler(
+                    setmsg_page, pattern=r"^setmsg_page_[0-9]+$"
+                ),
+                CallbackQueryHandler(setmsg_select, pattern=r"^setmsg_"),
             ],
             PLUS_REACTION_AWAIT: [
                 CommandHandler("reset", plus_reaction_receive),
