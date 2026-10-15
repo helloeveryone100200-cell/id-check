@@ -157,8 +157,7 @@ jobs:
                   for button in row
               ]
               assert any(
-                  button.callback_data == "setmsg_schedule_management_message"
-                  and button.text == bot.CUSTOM_MSG_LABELS["schedule_management_message"]
+                  button.callback_data == "setmsg_page_1"
                   for button in visible_buttons
               )
               assert not any(
@@ -166,6 +165,30 @@ jobs:
                   for button in visible_buttons
               )
               assert fake_message.reject_custom_icon is False
+
+              # The schedule-management message remains on a later page and
+              # retains its animated custom-emoji icon rather than stripping
+              # icons across the entire menu.
+              menu_keys = list(bot.CUSTOM_MSG_LABELS)
+              schedule_page = (
+                  menu_keys.index("schedule_management_message")
+                  // bot.SETMSG_MENU_PAGE_SIZE
+              )
+              schedule_markup, has_icons, page, page_count = (
+                  bot._setmsg_menu_keyboard({}, 123456, schedule_page)
+              )
+              schedule_buttons = [
+                  button for row in schedule_markup.inline_keyboard
+                  for button in row
+              ]
+              schedule_button = next(
+                  button for button in schedule_buttons
+                  if button.callback_data == "setmsg_schedule_management_message"
+              )
+              assert has_icons
+              assert getattr(schedule_button, "icon_custom_emoji_id", None) == "987654"
+              assert page == schedule_page
+              assert page_count > 1
           finally:
               bot._get_first_custom_emoji_id = original_get_custom_emoji_id
               if setmsg_owner_id is None:
