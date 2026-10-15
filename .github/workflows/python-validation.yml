@@ -49,6 +49,33 @@ jobs:
           sys.path.insert(0, "telegram-bot")
           import main as bot
 
+          # Regression: formatting that spans {time} must shrink when the
+          # six-unit placeholder is replaced by a five-unit time such as 06:00.
+          template = "✅ {time} (Yangon)\\n\\nMessage ကို ရိုက်ထည့်ပါ:"
+          entity_start = bot._utf16_len(template[:template.index("{time}")])
+          template_length = bot._utf16_len(template)
+          rendered, adjusted = bot._apply_fmt_and_adjust_entities(
+              template,
+              [{
+                  "type": MessageEntity.BOLD,
+                  "offset": entity_start,
+                  "length": template_length - entity_start,
+              }],
+              time="06:00",
+          )
+          assert adjusted is not None and len(adjusted) == 1
+          assert adjusted[0]["offset"] + adjusted[0]["length"] == bot._utf16_len(rendered)
+          assert bot._filter_valid_entities(
+              rendered, adjusted, message_key="schedule_message_prompt"
+          ) == adjusted
+
+          # Invalid stale ranges must be dropped so the caller can send plain text.
+          assert bot._filter_valid_entities(
+              rendered,
+              [{"type": MessageEntity.BOLD, "offset": 2, "length": bot._utf16_len(rendered)}],
+              message_key="schedule_message_prompt",
+          ) is None
+
           # Register all handlers without making a Telegram API request or
           # starting polling. Capture the built Application to test dispatch.
           registered_applications = []
