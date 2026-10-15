@@ -51,7 +51,7 @@ jobs:
 
           # Regression: formatting that spans {time} must shrink when the
           # six-unit placeholder is replaced by a five-unit time such as 06:00.
-          template = "✅ {time} (Yangon)\\n\\nMessage ကို ရိုက်ထည့်ပါ:"
+          template = "✅ {time} (Yangon)\n\nMessage ကို ရိုက်ထည့်ပါ:"
           entity_start = bot._utf16_len(template[:template.index("{time}")])
           template_length = bot._utf16_len(template)
           rendered, adjusted = bot._apply_fmt_and_adjust_entities(
