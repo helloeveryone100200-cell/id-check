@@ -5157,7 +5157,11 @@ def main():
         entry_points=[CommandHandler("setmsg", setmsg_start, filters=filters.ChatType.PRIVATE)],
         states={
             SETMSG_SELECT: [
-                CallbackQueryHandler(setmsg_page, pattern=r'^setmsg_page_\d+
+                CallbackQueryHandler(
+                    setmsg_page, pattern=r"^setmsg_page_[0-9]+$"
+                ),
+                CallbackQueryHandler(setmsg_select, pattern=r"^setmsg_"),
+            ],
             PLUS_REACTION_AWAIT: [
                 CommandHandler("reset", plus_reaction_receive),
                 CommandHandler("cancel", plus_reaction_cancel),
