@@ -73,9 +73,27 @@ jobs:
                   for entry in handler.entry_points
               )
           )
-          # The /setmsg conversation gets first priority in group 0; the
-          # persistent-keyboard handler remains in group -1 by design.
-          assert registered_app.handlers[0][0] is setmsg_handler
+          # Schedule PM conversation is first in group 0 so active time/message
+          # input cannot be intercepted by another conversation's broad text state.
+          schedule_handler = next(
+              handler
+              for handler in registered_app.handlers.get(0, [])
+              if isinstance(handler, bot.ConversationHandler)
+              and any(
+                  isinstance(entry, bot.CommandHandler)
+                  and "start" in entry.commands
+                  for entry in handler.entry_points
+              )
+              and any(
+                  isinstance(entry, bot.CommandHandler)
+                  and "setschedule" in entry.commands
+                  for entry in handler.entry_points
+              )
+          )
+          assert registered_app.handlers[0][0] is schedule_handler
+          assert registered_app.handlers[0].index(schedule_handler) < (
+              registered_app.handlers[0].index(setmsg_handler)
+          )
           command_update = Update(
               update_id=987654,
               message=Message(
@@ -92,6 +110,65 @@ jobs:
           # CommandHandler only needs a bot username for this synthetic update.
           command_update.message._bot = SimpleNamespace(username="smoke_test_bot")
           assert setmsg_handler.check_update(command_update) is not None
+
+          # Reproduce the exact schedule PM deep-link -> time entry flow without
+          # a Telegram API call. This guards against silent loss of the time state.
+          schedule_replies = []
+          original_consume_token = bot._consume_schedule_pm_token
+          original_require_schedule_admin = bot._require_group_schedule_admin
+          original_reply_custom = bot._reply_custom
+
+          async def fake_schedule_reply(target, bot_data, key, **kwargs):
+              schedule_replies.append((key, kwargs))
+
+          async def fake_schedule_admin_check(update, context):
+              return True
+
+          schedule_context = SimpleNamespace(
+              args=["sched_testtoken"],
+              user_data={},
+              application=SimpleNamespace(bot_data={"custom_msgs": {}}),
+          )
+          schedule_message = SimpleNamespace(text="/start sched_testtoken")
+          schedule_update = SimpleNamespace(
+              effective_chat=SimpleNamespace(type="private", id=123456),
+              effective_user=SimpleNamespace(id=123456),
+              message=schedule_message,
+              effective_message=schedule_message,
+          )
+          try:
+              bot._consume_schedule_pm_token = lambda parameter, user_id: {
+                  "group_id": -1001234567890,
+                  "action": "set",
+              }
+              bot._require_group_schedule_admin = fake_schedule_admin_check
+              bot._reply_custom = fake_schedule_reply
+
+              entry_state = asyncio.run(bot.schedule_start_entry(
+                  schedule_update, schedule_context
+              ))
+              assert entry_state == bot.SCHEDULE_SET_TIME
+              assert schedule_replies[-1][0] == "schedule_time_prompt"
+              assert schedule_context.user_data["schedule_pm_group_id"] == -1001234567890
+              assert schedule_context.user_data["schedule_pm_action"] == "set"
+
+              schedule_time_update = SimpleNamespace(
+                  effective_chat=SimpleNamespace(type="private", id=123456),
+                  effective_user=SimpleNamespace(id=123456),
+                  effective_message=SimpleNamespace(text="09:30"),
+              )
+              time_state = asyncio.run(bot.schedule_set_time(
+                  schedule_time_update, schedule_context
+              ))
+              assert time_state == bot.SCHEDULE_SET_MESSAGE
+              assert schedule_context.user_data["new_schedule_hour"] == 9
+              assert schedule_context.user_data["new_schedule_minute"] == 30
+              assert schedule_replies[-1][0] == "schedule_message_prompt"
+              assert schedule_replies[-1][1]["time"] == "09:30"
+          finally:
+              bot._consume_schedule_pm_token = original_consume_token
+              bot._require_group_schedule_admin = original_require_schedule_admin
+              bot._reply_custom = original_reply_custom
 
           # The owner must receive /setmsg in their private command menu even
           # when OWNER_ID is not duplicated in ADMIN_IDS.

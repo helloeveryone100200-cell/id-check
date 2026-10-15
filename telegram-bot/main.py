@@ -4022,6 +4022,12 @@ async def schedule_start_entry(
     message = _update_message(update)
     bot_data = context.application.bot_data
     parameter = context.args[0] if context.args else ""
+    logging.info(
+        "Schedule PM entry received: user_id=%s chat_type=%s schedule_link=%s",
+        update.effective_user.id if update.effective_user else None,
+        chat.type if chat else None,
+        parameter.startswith("sched_"),
+    )
 
     if not chat or chat.type != "private" or not parameter.startswith("sched_"):
         if chat and chat.type == "private":
@@ -4038,6 +4044,12 @@ async def schedule_start_entry(
 
     _clear_schedule_pm_session(context)
     group_id = int(payload["group_id"])
+    logging.info(
+        "Schedule PM session accepted: user_id=%s group_id=%s action=%s",
+        user.id if user else None,
+        group_id,
+        payload.get("action"),
+    )
     context.user_data["schedule_pm_group_id"] = group_id
     context.user_data["schedule_pm_action"] = payload["action"]
     if not await _require_group_schedule_admin(update, context):
@@ -4066,6 +4078,12 @@ async def schedule_start_entry(
 
 async def schedule_set_time(update: Update, context: CallbackContext) -> int:
     message = update.effective_message
+    logging.info(
+        "Schedule PM time-state handler invoked: user_id=%s chat_type=%s has_text=%s",
+        update.effective_user.id if update.effective_user else None,
+        update.effective_chat.type if update.effective_chat else None,
+        bool(message and message.text),
+    )
     text = (message.text or "").strip() if message else ""
     match = re.match(r"^(\d{1,2}):(\d{2})$", text)
     bot_data = context.application.bot_data
@@ -5293,6 +5311,32 @@ def main():
         .build()
     )
 
+    schedule_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("start", schedule_start_entry, filters=filters.ChatType.PRIVATE),
+            CommandHandler("setschedule", setschedule_command, filters=filters.ChatType.GROUPS),
+        ],
+        states={
+            SCHEDULE_SET_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule_set_time)],
+            SCHEDULE_SET_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule_set_message)],
+            SCHEDULE_SELECT_TYPE: [CallbackQueryHandler(schedule_select_type, pattern=r'^sched_type_|^sched_cancel$')],
+        },
+        fallbacks=[
+            CallbackQueryHandler(schedule_cancel, pattern=r'^sched_cancel$'),
+            CommandHandler('cancel', schedule_cancel),
+        ],
+        allow_reentry=True,
+    )
+    application.add_handler(schedule_handler)
+    application.add_handler(CallbackQueryHandler(
+        schedule_pm_open_callback,
+        pattern=r'^schedule_pm_open_(?:set|remove)$',
+    ))
+    application.add_handler(CallbackQueryHandler(
+        schedule_remove_callback,
+        pattern=r'^sched_remove_(?:pick_[A-Za-z0-9_-]+|delete_[A-Za-z0-9_-]+|cancel)$',
+    ))
+
     # /setmsg — owner-only message customiser
     setmsg_handler = ConversationHandler(
         entry_points=[CommandHandler("setmsg", setmsg_start, filters=filters.ChatType.PRIVATE)],
@@ -5472,31 +5516,7 @@ def main():
 
 
 
-    schedule_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("start", schedule_start_entry, filters=filters.ChatType.PRIVATE),
-            CommandHandler("setschedule", setschedule_command, filters=filters.ChatType.GROUPS),
-        ],
-        states={
-            SCHEDULE_SET_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule_set_time)],
-            SCHEDULE_SET_MESSAGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, schedule_set_message)],
-            SCHEDULE_SELECT_TYPE: [CallbackQueryHandler(schedule_select_type, pattern=r'^sched_type_|^sched_cancel$')],
-        },
-        fallbacks=[
-            CallbackQueryHandler(schedule_cancel, pattern=r'^sched_cancel$'),
-            CommandHandler('cancel', schedule_cancel),
-        ],
-        allow_reentry=True,
-    )
-    application.add_handler(schedule_handler)
-    application.add_handler(CallbackQueryHandler(
-        schedule_pm_open_callback,
-        pattern=r'^schedule_pm_open_(?:set|remove)$',
-    ))
-    application.add_handler(CallbackQueryHandler(
-        schedule_remove_callback,
-        pattern=r'^sched_remove_(?:pick_[A-Za-z0-9_-]+|delete_[A-Za-z0-9_-]+|cancel)$',
-    ))
+
 
     feedback_handler = ConversationHandler(
         entry_points=[CommandHandler("feedback", start_feedback)],
