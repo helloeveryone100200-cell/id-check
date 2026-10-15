@@ -865,6 +865,9 @@ async def _reply_custom(target_message, bot_data: dict, key: str,
 
     text, adj_entities_raw = _apply_fmt_and_adjust_entities(raw_text, raw_entities, **fmt)
     text += suffix
+    adj_entities_raw = _filter_valid_entities(
+        text, adj_entities_raw, message_key=key
+    )
 
     entities = _build_entities(adj_entities_raw) if adj_entities_raw else None
 
@@ -883,6 +886,9 @@ async def _send_custom(bot, chat_id: int, bot_data: dict, key: str,
 
     text, adj_entities_raw = _apply_fmt_and_adjust_entities(
         raw_text, raw_entities, **fmt
+    )
+    adj_entities_raw = _filter_valid_entities(
+        text, adj_entities_raw, message_key=key
     )
     entities = _build_entities(adj_entities_raw) if adj_entities_raw else None
 
@@ -906,6 +912,9 @@ async def _edit_custom(query, bot_data: dict, key: str,
 
     text, adj_entities_raw = _apply_fmt_and_adjust_entities(
         raw_text, raw_entities, **fmt
+    )
+    adj_entities_raw = _filter_valid_entities(
+        text, adj_entities_raw, message_key=key
     )
     entities = _build_entities(adj_entities_raw) if adj_entities_raw else None
 
@@ -1447,25 +1456,52 @@ def _apply_fmt_and_adjust_entities(raw_text: str, entities_raw, **fmt) -> tuple:
         # Nothing was replaced — offsets unchanged
         return rendered, list(entities_raw)
 
-    # Entity offsets are UTF-16 code units. Replay text substitutions left-to-right
-    # and shift entities only when they begin after a replaced placeholder.
+    # Entity offsets and lengths are UTF-16 code units. Replay substitutions
+    # left-to-right and remap both ends of every entity across each replacement.
     adjusted = [dict(e) for e in entities_raw]
     working = raw_text
 
     for key, val in fmt.items():
         placeholder = "{" + key + "}"
         val_str = str(val)
-        delta = _utf16_len(val_str) - _utf16_len(placeholder)
+        placeholder_length = _utf16_len(placeholder)
+        replacement_length = _utf16_len(val_str)
+        delta = replacement_length - placeholder_length
         search_from = 0
         while True:
             idx = working.find(placeholder, search_from)
             if idx == -1:
                 break
+
+            start_ph = _utf16_len(working[:idx])
+            end_ph = start_ph + placeholder_length
             if delta != 0:
-                end_ph = _utf16_len(working[:idx]) + _utf16_len(placeholder)
-                for e in adjusted:
-                    if e.get("offset", 0) >= end_ph:
-                        e["offset"] = e["offset"] + delta
+                for entity in adjusted:
+                    entity_start = int(entity.get("offset", 0))
+                    entity_length = int(entity.get("length", 0))
+                    entity_end = entity_start + entity_length
+
+                    if entity_end <= start_ph:
+                        # Entity is wholly before the placeholder.
+                        continue
+                    if entity_start >= end_ph:
+                        # Entity is wholly after the placeholder.
+                        entity["offset"] = entity_start + delta
+                    elif entity_start <= start_ph and entity_end >= end_ph:
+                        # Entity encloses the placeholder (common for bold/italic).
+                        entity["length"] = entity_length + delta
+                    elif entity_start < start_ph < entity_end <= end_ph:
+                        # Entity overlaps only the placeholder's left edge.
+                        entity["length"] = start_ph - entity_start
+                    elif start_ph <= entity_start < end_ph < entity_end:
+                        # Entity overlaps only the placeholder's right edge.
+                        entity["offset"] = start_ph + replacement_length
+                        entity["length"] = entity_end - end_ph
+                    else:
+                        # An entity contained inside the replaced placeholder cannot
+                        # safely retain its original coordinates (notably custom emoji).
+                        entity["length"] = 0
+
             working = working[:idx] + val_str + working[idx + len(placeholder):]
             search_from = idx + len(val_str)
 
@@ -1480,6 +1516,40 @@ def _adjust_entities_for_count(template: str, entities_raw, count: int) -> tuple
 def _utf16_len(s: str) -> int:
     """UTF-16 code-unit length — the unit Telegram uses for entity offsets."""
     return len(s.encode("utf-16-le")) // 2
+
+
+def _filter_valid_entities(text: str, entities_raw, *, message_key: str) -> list | None:
+    """Drop stale entity ranges instead of letting Telegram reject the whole reply."""
+    if not entities_raw:
+        return None
+
+    text_length = _utf16_len(text)
+    valid = []
+    for raw in entities_raw:
+        try:
+            entity = dict(raw)
+            offset = int(entity.get("offset", 0))
+            length = int(entity.get("length", 0))
+        except (TypeError, ValueError):
+            logging.warning("Ignoring malformed entity for custom message %s.", message_key)
+            continue
+
+        entity_type = entity.get("type")
+        custom_emoji_id = entity.get("custom_emoji_id") or entity.get("customEmojiId")
+        if (
+            offset < 0
+            or length <= 0
+            or offset + length > text_length
+            or (entity_type == "custom_emoji" and not custom_emoji_id)
+        ):
+            logging.warning(
+                "Ignoring invalid entity for custom message %s: type=%s offset=%s length=%s text_length=%s",
+                message_key, entity_type, offset, length, text_length,
+            )
+            continue
+        valid.append(entity)
+
+    return valid or None
 
 
 def _get_digit_map(bot_data: dict) -> dict:
