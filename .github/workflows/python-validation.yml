@@ -196,6 +196,139 @@ jobs:
               else:
                   os.environ["OWNER_ID"] = setmsg_owner_id
 
+          # Custom animated emoji IDs must be sent through Telegram's button
+          # icon field instead of leaving only the fallback Unicode glyph in text.
+          def custom_emoji_config(text, emoji, custom_emoji_id):
+              idx = text.index(emoji)
+              return {
+                  "text": text,
+                  "entities": [{
+                      "type": "custom_emoji",
+                      "offset": bot._utf16_len(text[:idx]),
+                      "length": bot._utf16_len(emoji),
+                      "custom_emoji_id": custom_emoji_id,
+                  }],
+              }
+
+          schedule_emoji_data = {
+              "custom_msgs": {
+                  "schedule_menu_button": custom_emoji_config(
+                      "🔥 Schedule", "🔥", "710000000000001"
+                  ),
+                  "schedule_set_button": custom_emoji_config(
+                      "✨ Set Schedule", "✨", "710000000000002"
+                  ),
+                  "schedule_remove_button": custom_emoji_config(
+                      "🚀 Remove Schedule", "🚀", "710000000000003"
+                  ),
+              }
+          }
+          reply_schedule_button = bot._schedule_keyboard_button(
+              schedule_emoji_data, "schedule_menu_button", style="primary"
+          )
+          inline_set_button = bot._schedule_keyboard_button(
+              schedule_emoji_data,
+              "schedule_set_button",
+              callback_data="schedule_pm_open_set",
+              style="primary",
+          )
+          inline_remove_button = bot._schedule_keyboard_button(
+              schedule_emoji_data,
+              "schedule_remove_button",
+              callback_data="schedule_pm_open_remove",
+              style="danger",
+          )
+          assert reply_schedule_button.text == "Schedule"
+          assert reply_schedule_button.icon_custom_emoji_id == "710000000000001"
+          assert inline_set_button.text == "Set Schedule"
+          assert inline_set_button.icon_custom_emoji_id == "710000000000002"
+          assert inline_remove_button.text == "Remove Schedule"
+          assert inline_remove_button.icon_custom_emoji_id == "710000000000003"
+          assert "🔥 Schedule" in bot._schedule_keyboard_labels(
+              schedule_emoji_data, "schedule_menu_button"
+          ), "legacy reply-keyboard labels must still route after deployment"
+          actual_group_schedule = next(
+              button
+              for row in bot._main_reply_keyboard(
+                  schedule_emoji_data, include_schedule=True
+              ).keyboard
+              for button in row
+              if getattr(button, "icon_custom_emoji_id", None)
+          )
+          assert actual_group_schedule.text == "Schedule"
+          assert actual_group_schedule.icon_custom_emoji_id == "710000000000001"
+
+          # Custom emojis in counter row/total templates and the animated
+          # digits substituted into {count}/{grand_total} must all be entities
+          # on the outgoing Telegram message, with UTF-16 offsets kept correct.
+          digit_text = "😀😁😂🤣😃😄😅😆😉😊"
+          digit_entities = []
+          for digit_index, emoji in enumerate(digit_text):
+              digit_entities.append({
+                  "type": "custom_emoji",
+                  "offset": bot._utf16_len(digit_text[:digit_index]),
+                  "length": bot._utf16_len(emoji),
+                  "custom_emoji_id": str(900000000000000 + digit_index),
+              })
+          row_text = "{i}. {name}: {count} 🔥"
+          grand_text = "Grand total: {grand_total} 🏆"
+          counter_emoji_data = {
+              "custom_msgs": {
+                  "digit_emoji": {
+                      "text": digit_text,
+                      "entities": digit_entities,
+                  },
+                  "total_plus_row": custom_emoji_config(
+                      row_text, "🔥", "710000000000011"
+                  ),
+                  "total_plus_grand": custom_emoji_config(
+                      grand_text, "🏆", "710000000000012"
+                  ),
+              }
+          }
+          class FakeCounterMessage:
+              def __init__(self):
+                  self.sent = []
+              async def reply_text(self, text, **kwargs):
+                  self.sent.append((text, kwargs))
+
+          counter_message = FakeCounterMessage()
+          asyncio.run(bot._send_total_plus(
+              counter_message,
+              counter_emoji_data,
+              entries={"user-1": 23},
+              grand_total=46,
+              names={"user-1": "Alice"},
+          ))
+          assert len(counter_message.sent) == 1
+          counter_text, counter_kwargs = counter_message.sent[0]
+          counter_entities = counter_kwargs["entities"]
+          custom_ids = {
+              entity.custom_emoji_id
+              for entity in counter_entities
+              if entity.type == "custom_emoji"
+          }
+          assert "710000000000011" in custom_ids
+          assert "710000000000012" in custom_ids
+          assert "900000000000002" in custom_ids
+          assert "900000000000003" in custom_ids
+          assert "900000000000004" in custom_ids
+          assert "900000000000006" in custom_ids
+          row_icon_entity = next(
+              entity for entity in counter_entities
+              if entity.custom_emoji_id == "710000000000011"
+          )
+          grand_icon_entity = next(
+              entity for entity in counter_entities
+              if entity.custom_emoji_id == "710000000000012"
+          )
+          assert row_icon_entity.offset == bot._utf16_len(
+              counter_text[:counter_text.index("🔥")]
+          )
+          assert grand_icon_entity.offset == bot._utf16_len(
+              counter_text[:counter_text.index("🏆")]
+          )
+
           private_buttons = [
               button.text
               for row in bot._main_reply_keyboard({}, include_schedule=False).keyboard

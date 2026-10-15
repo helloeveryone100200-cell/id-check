@@ -402,15 +402,58 @@ def _normalize_schedule_keyboard_text(text: str, limit: int = 64) -> str:
     return normalized[:limit]
 
 
+_SCHEDULE_ACTION_BUTTON_KEYS = {
+    "schedule_menu_button",
+    "schedule_set_button",
+    "schedule_remove_button",
+}
+
+
 def _schedule_keyboard_label(bot_data: dict, key: str) -> str:
-    """Get a bounded custom schedule keyboard label."""
-    label = _normalize_schedule_keyboard_text(get_msg(bot_data, key))
+    """Get a bounded schedule button label, excluding a custom emoji rendered as an icon."""
+    label = get_msg(bot_data, key)
+    if key in _SCHEDULE_ACTION_BUTTON_KEYS:
+        stored = _get_custom_msgs(bot_data).get(key, {})
+        entity, custom_emoji_id = _first_custom_emoji_entity(
+            stored.get("entities") or []
+        )
+        if entity and custom_emoji_id:
+            label = _remove_entity_from_text(label, entity).strip()
+    label = _normalize_schedule_keyboard_text(label)
     return label or _normalize_schedule_keyboard_text(DEFAULT_MSGS.get(key, key))
 
 
+def _schedule_keyboard_button(
+    bot_data: dict,
+    key: str,
+    *,
+    callback_data: str | None = None,
+    style: str | None = None,
+):
+    """Build a schedule button with the stored Premium custom emoji as its icon."""
+    kwargs = {}
+    if style:
+        kwargs["style"] = style
+    if key in _SCHEDULE_ACTION_BUTTON_KEYS:
+        custom_emoji_id = _get_first_custom_emoji_id(bot_data, key)
+        if custom_emoji_id:
+            kwargs["icon_custom_emoji_id"] = custom_emoji_id
+    label = _schedule_keyboard_label(bot_data, key)
+    if callback_data is not None:
+        return InlineKeyboardButton(
+            label,
+            callback_data=callback_data,
+            **kwargs,
+        )
+    return KeyboardButton(label, **kwargs)
+
+
 def _schedule_keyboard_labels(bot_data: dict, key: str) -> set[str]:
-    """Current and recently replaced labels keep already-shown keyboards usable."""
+    """Current, raw legacy, and aliased labels keep old reply keyboards usable."""
     labels = {_schedule_keyboard_label(bot_data, key)}
+    raw_label = _normalize_schedule_keyboard_text(get_msg(bot_data, key))
+    if raw_label:
+        labels.add(raw_label)
     aliases = bot_data.get("schedule_button_aliases", {}).get(key, [])
     labels.update(
         _normalize_schedule_keyboard_text(label)
@@ -421,12 +464,16 @@ def _schedule_keyboard_labels(bot_data: dict, key: str) -> set[str]:
 
 
 def _remember_schedule_button_alias(bot_data: dict, key: str) -> None:
-    """Keep the old displayed label routable after an owner customizes it."""
-    old_label = _schedule_keyboard_label(bot_data, key)
+    """Keep both the old rendered label and legacy raw label routable after edits."""
     aliases_by_key = bot_data.setdefault("schedule_button_aliases", {})
     aliases = aliases_by_key.setdefault(key, [])
-    if old_label and old_label not in aliases:
-        aliases.append(old_label)
+    old_labels = {
+        _schedule_keyboard_label(bot_data, key),
+        _normalize_schedule_keyboard_text(get_msg(bot_data, key)),
+    }
+    for old_label in old_labels:
+        if old_label and old_label not in aliases:
+            aliases.append(old_label)
     aliases_by_key[key] = aliases[-20:]
 
 
@@ -1356,21 +1403,22 @@ def _apply_fmt_and_adjust_entities(raw_text: str, entities_raw, **fmt) -> tuple:
         # Nothing was replaced — offsets unchanged
         return rendered, list(entities_raw)
 
-    # Replay substitutions left-to-right, shifting offsets after each replacement.
+    # Entity offsets are UTF-16 code units. Replay text substitutions left-to-right
+    # and shift entities only when they begin after a replaced placeholder.
     adjusted = [dict(e) for e in entities_raw]
     working = raw_text
 
     for key, val in fmt.items():
         placeholder = "{" + key + "}"
         val_str = str(val)
-        delta = len(val_str) - len(placeholder)
+        delta = _utf16_len(val_str) - _utf16_len(placeholder)
         search_from = 0
         while True:
             idx = working.find(placeholder, search_from)
             if idx == -1:
                 break
             if delta != 0:
-                end_ph = idx + len(placeholder)
+                end_ph = _utf16_len(working[:idx]) + _utf16_len(placeholder)
                 for e in adjusted:
                     if e.get("offset", 0) >= end_ph:
                         e["offset"] = e["offset"] + delta
@@ -1509,23 +1557,44 @@ async def _reply_custom_plus(message, bot_data: dict, count: int) -> None:
 
 # ─── Animated-count helpers ──────────────────────────────────────────────────
 
-def _insert_animated_count(template: str, count_val: int, count_key: str,
-                            digit_map: dict) -> tuple:
-    """Replace {count_key} in template with animated digit text.
-
-    Returns (final_text, entities_raw) with offsets relative to start of text.
-    """
+def _insert_animated_count(
+    template: str,
+    count_val: int,
+    count_key: str,
+    digit_map: dict,
+    entities_raw=None,
+) -> tuple:
+    """Replace a count placeholder while preserving template custom-emoji entities."""
     count_text, count_ents_raw = _render_count(count_val, digit_map)
     placeholder = "{" + count_key + "}"
     ph_idx = template.find(placeholder)
+    template_entities = [dict(e) for e in (entities_raw or [])]
     if ph_idx == -1:
-        return template, []
-    prefix   = template[:ph_idx]
-    suffix   = template[ph_idx + len(placeholder):]
-    final    = prefix + count_text + suffix
-    base_u16 = _utf16_len(prefix)
-    shifted  = [{**e, "offset": e.get("offset", 0) + base_u16} for e in count_ents_raw]
-    return final, shifted
+        return template, template_entities
+
+    prefix = template[:ph_idx]
+    suffix = template[ph_idx + len(placeholder):]
+    final = prefix + count_text + suffix
+    prefix_u16 = _utf16_len(prefix)
+    placeholder_u16 = _utf16_len(placeholder)
+    count_u16 = _utf16_len(count_text)
+    delta = count_u16 - placeholder_u16
+    suffix_boundary = prefix_u16 + placeholder_u16
+
+    shifted_template_entities = []
+    for entity in template_entities:
+        entity = dict(entity)
+        if entity.get("offset", 0) >= suffix_boundary:
+            entity["offset"] = entity["offset"] + delta
+        shifted_template_entities.append(entity)
+
+    shifted_count_entities = [
+        {**dict(entity), "offset": entity.get("offset", 0) + prefix_u16}
+        for entity in count_ents_raw
+    ]
+    merged = shifted_template_entities + shifted_count_entities
+    merged.sort(key=lambda entity: entity.get("offset", 0))
+    return final, merged
 
 
 async def _reply_custom_animated(message, bot_data: dict, key: str,
@@ -1592,8 +1661,12 @@ async def _send_total_plus(message, bot_data: dict,
     hdr_stored   = _get_custom_msgs(bot_data).get("total_plus_header", {})
     hdr_text     = hdr_stored.get("text") or DEFAULT_MSGS["total_plus_header"]
     hdr_ents_raw = list(hdr_stored.get("entities") or [])
-    row_tmpl     = get_msg(bot_data, "total_plus_row")    # {i}, {name}, {count}
-    grand_tmpl   = get_msg(bot_data, "total_plus_grand")  # {grand_total}
+    row_stored   = _get_custom_msgs(bot_data).get("total_plus_row", {})
+    grand_stored = _get_custom_msgs(bot_data).get("total_plus_grand", {})
+    row_tmpl     = row_stored.get("text") or DEFAULT_MSGS["total_plus_row"]
+    row_ents_raw = row_stored.get("entities") or []
+    grand_tmpl   = grand_stored.get("text") or DEFAULT_MSGS["total_plus_grand"]
+    grand_ents_raw = grand_stored.get("entities") or []
 
     text: str    = ""
     all_ents: list = []
@@ -1606,10 +1679,24 @@ async def _send_total_plus(message, bot_data: dict,
                 all_ents.append({**dict(e), "offset": e.get("offset", 0) + base})
         text += chunk
 
-    def _push_count(tmpl: str, count_key: str, count_val: int, **pre_fmt):
-        """Substitute pre_fmt then replace {count_key} with animated digits."""
-        pre = _safe_substitute(tmpl, **pre_fmt)
-        chunk, chunk_ents = _insert_animated_count(pre, count_val, count_key, digit_map)
+    def _push_count(
+        tmpl: str,
+        count_key: str,
+        count_val: int,
+        template_entities=None,
+        **pre_fmt,
+    ):
+        """Substitute fields and animated counts without dropping template emoji entities."""
+        pre, pre_entities = _apply_fmt_and_adjust_entities(
+            tmpl, template_entities, **pre_fmt
+        )
+        chunk, chunk_ents = _insert_animated_count(
+            pre,
+            count_val,
+            count_key,
+            digit_map,
+            entities_raw=pre_entities,
+        )
         _push(chunk, chunk_ents)
 
     # --- Header ---
@@ -1620,13 +1707,20 @@ async def _send_total_plus(message, bot_data: dict,
     items = list(entries.items())
     for j, (uid, cnt) in enumerate(items, 1):
         name = names.get(uid, str(uid))
-        _push_count(row_tmpl, "count", cnt, i=j, name=name)
+        _push_count(
+            row_tmpl, "count", cnt, template_entities=row_ents_raw, i=j, name=name
+        )
         if j < len(items):
             _push("\n")
 
     # --- Grand total ---
     _push("\n\n")
-    _push_count(grand_tmpl, "grand_total", grand_total)
+    _push_count(
+        grand_tmpl,
+        "grand_total",
+        grand_total,
+        template_entities=grand_ents_raw,
+    )
 
     entities = _build_entities(all_ents) if all_ents else None
     if entities:
@@ -2139,8 +2233,9 @@ def _main_reply_keyboard(bot_data: dict, include_schedule: bool = False) -> Repl
     ]
     if include_schedule:
         rows.append([
-            KeyboardButton(
-                _schedule_keyboard_label(bot_data, "schedule_menu_button"),
+            _schedule_keyboard_button(
+                bot_data,
+                "schedule_menu_button",
                 style="primary",
             ),
         ])
@@ -3725,13 +3820,15 @@ async def schedule_management_menu(
 
     bot_data = context.application.bot_data
     keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton(
-            _schedule_keyboard_label(bot_data, "schedule_set_button"),
+        _schedule_keyboard_button(
+            bot_data,
+            "schedule_set_button",
             callback_data="schedule_pm_open_set",
             style="primary",
         ),
-        InlineKeyboardButton(
-            _schedule_keyboard_label(bot_data, "schedule_remove_button"),
+        _schedule_keyboard_button(
+            bot_data,
+            "schedule_remove_button",
             callback_data="schedule_pm_open_remove",
             style="danger",
         ),
