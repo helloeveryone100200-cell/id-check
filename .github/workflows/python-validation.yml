@@ -329,6 +329,113 @@ jobs:
               counter_text[:counter_text.index("🏆")]
           )
 
+          # All user-facing reply-keyboard labels can be customized independently.
+          # Each custom emoji is moved into Telegram's dedicated icon field.
+          custom_reply_button_specs = {
+              "showdata_button": ("🔥 Daily Report", "🔥", "720000000000001", "Showdata"),
+              "total_plus_button": ("💎 Plus Summary", "💎", "720000000000002", "Total Plus"),
+              "clear_data_button": ("🧹 Clear Today", "🧹", "720000000000003", "Clear Data"),
+              "reset_plus_button": ("🔁 Reset Counter", "🔁", "720000000000004", "Reset Plus"),
+              "clear_all_button": ("🧽 Clear All Data", "🧽", "720000000000005", "Clear All"),
+              "reset_plus_all_button": ("🔒 Reset All Counters", "🔒", "720000000000006", "Reset Plus All"),
+              "number_words_button": ("🔢 Number Converter", "🔢", "720000000000007", "Numbers to Words Converter"),
+              "schedule_menu_button": ("📅 Schedule Now", "📅", "720000000000008", "Schedule"),
+          }
+          custom_keyboard_data = {"custom_msgs": {}}
+          # Save the old labels before applying the custom labels, preserving
+          # route compatibility for ReplyKeyboards clients may still be showing.
+          for button_key, (_, _, _, _) in custom_reply_button_specs.items():
+              bot._remember_schedule_button_alias(custom_keyboard_data, button_key)
+          for button_key, (raw_text, emoji, emoji_id, _) in custom_reply_button_specs.items():
+              custom_keyboard_data["custom_msgs"][button_key] = custom_emoji_config(
+                  raw_text, emoji, emoji_id
+              )
+
+          custom_group_keyboard = bot._main_reply_keyboard(
+              custom_keyboard_data, include_schedule=True
+          )
+          custom_buttons_by_text = {
+              button.text: button
+              for row in custom_group_keyboard.keyboard
+              for button in row
+          }
+          for button_key, (raw_text, emoji, emoji_id, original_label) in (
+              custom_reply_button_specs.items()
+          ):
+              display_label = raw_text.replace(emoji, "", 1).strip()
+              button = custom_buttons_by_text[display_label]
+              assert button.icon_custom_emoji_id == emoji_id, button_key
+              assert original_label in bot._schedule_keyboard_labels(
+                  custom_keyboard_data, button_key
+              ), f"previous label no longer routes: {button_key}"
+              assert button.text == display_label
+
+          # Clicking either the new custom label or a stale old label still runs
+          # the same underlying action, not a text-dependent hard-coded command.
+          action_handlers = {
+              "showdata_button": "show_data",
+              "total_plus_button": "total_plus_command",
+              "clear_data_button": "clear_data",
+              "reset_plus_button": "reset_plus_command",
+              "clear_all_button": "admin_clearall_command",
+              "reset_plus_all_button": "admin_resetplusall_command",
+          }
+          original_action_handlers = {
+              key: getattr(bot, function_name)
+              for key, function_name in action_handlers.items()
+          }
+          dispatched_actions = []
+          try:
+              for button_key, function_name in action_handlers.items():
+                  async def record_action(update, context, action_key=button_key):
+                      dispatched_actions.append(action_key)
+                  setattr(bot, function_name, record_action)
+
+              route_context = SimpleNamespace(
+                  application=SimpleNamespace(bot_data=custom_keyboard_data)
+              )
+              route_update = SimpleNamespace(
+                  message=SimpleNamespace(text="")
+              )
+              display_labels = {
+                  key: raw.replace(emoji, "", 1).strip()
+                  for key, (raw, emoji, _, _) in custom_reply_button_specs.items()
+              }
+              for button_key, function_name in action_handlers.items():
+                  for label in (
+                      display_labels[button_key],
+                      custom_reply_button_specs[button_key][3],
+                  ):
+                      route_update.message.text = label
+                      asyncio.run(bot.main_menu_text_handler(
+                          route_update, route_context
+                      ))
+                      assert dispatched_actions[-1] == button_key, (button_key, label)
+          finally:
+              for button_key, function_name in action_handlers.items():
+                  setattr(bot, function_name, original_action_handlers[button_key])
+
+          # The Number Converter's updated label is recognized by its separate
+          # private-only ConversationHandler entry point as well.
+          registered_app.bot_data.update(custom_keyboard_data)
+          number_words_handler = next(
+              handler
+              for handler in registered_app.handlers.get(0, [])
+              if isinstance(handler, bot.MessageHandler)
+              and handler.callback is bot.number_words_start
+          )
+          number_update = Update(
+              update_id=987655,
+              message=Message(
+                  message_id=2,
+                  date=datetime.now(timezone.utc),
+                  chat=Chat(id=123456, type="private"),
+                  from_user=User(id=123456, first_name="Owner", is_bot=False),
+                  text="Number Converter",
+              ),
+          )
+          assert number_words_handler.check_update(number_update) is not None
+
           private_buttons = [
               button.text
               for row in bot._main_reply_keyboard({}, include_schedule=False).keyboard
