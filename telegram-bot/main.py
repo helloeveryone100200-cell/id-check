@@ -1477,8 +1477,12 @@ def _apply_fmt_and_adjust_entities(raw_text: str, entities_raw, **fmt) -> tuple:
             end_ph = start_ph + placeholder_length
             if delta != 0:
                 for entity in adjusted:
-                    entity_start = int(entity.get("offset", 0))
-                    entity_length = int(entity.get("length", 0))
+                    try:
+                        entity_start = int(entity.get("offset", 0))
+                        entity_length = int(entity.get("length", 0))
+                    except (TypeError, ValueError):
+                        entity["length"] = 0
+                        continue
                     entity_end = entity_start + entity_length
 
                     if entity_end <= start_ph:
