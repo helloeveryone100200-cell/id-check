@@ -424,6 +424,12 @@ _SCHEDULE_ACTION_BUTTON_KEYS = {
     "schedule_menu_button",
     "schedule_set_button",
     "schedule_remove_button",
+    "schedule_once_button",
+    "schedule_daily_button",
+    "schedule_cancel_button",
+    "schedule_remove_cancel_button",
+    "schedule_delete_button",
+    "schedule_delete_cancel_button",
 }
 _REPLY_KEYBOARD_BUTTON_KEYS = {
     "showdata_button",
@@ -4031,11 +4037,20 @@ def _schedule_type_label(bot_data: dict, schedule: dict) -> str:
 def _schedule_picker_label(
     bot_data: dict, sched_id: str, schedule: dict
 ) -> str:
-    """Build a unique reply-keyboard choice and keep its ID visible."""
+    """Build a unique schedule button label, leaving custom emoji for its native icon."""
     schedule_time = f"{int(schedule.get('hour', 0)):02d}:{int(schedule.get('minute', 0)):02d}"
-    rendered = get_msg(
-        bot_data,
-        "schedule_list_item",
+    stored = _get_custom_msgs(bot_data).get("schedule_list_item", {})
+    template = stored.get("text") or DEFAULT_MSGS.get("schedule_list_item", "")
+    emoji_entity, custom_emoji_id = _first_custom_emoji_entity(
+        stored.get("entities") or []
+    )
+    # Inline button labels cannot carry MessageEntity metadata. Remove the first
+    # custom-emoji glyph from the template and render it via icon_custom_emoji_id.
+    # Removing it before placeholder substitution keeps its UTF-16 offset valid.
+    if emoji_entity and custom_emoji_id:
+        template = _remove_entity_from_text(template, emoji_entity)
+    rendered = _safe_substitute(
+        template,
         time=schedule_time,
         type=_schedule_type_label(bot_data, schedule),
         id=sched_id,
@@ -4047,6 +4062,20 @@ def _schedule_picker_label(
     suffix = f" · {sched_id}"
     prefix = prefix[:max(0, 64 - len(suffix))]
     return f"{prefix}{suffix}" if prefix else str(sched_id)[:64]
+
+
+def _schedule_picker_button(
+    bot_data: dict, sched_id: str, schedule: dict
+) -> InlineKeyboardButton:
+    """Build a schedule picker button with its template's animated emoji icon."""
+    kwargs = {"callback_data": f"sched_remove_pick_{sched_id}"}
+    custom_emoji_id = _get_first_custom_emoji_id(bot_data, "schedule_list_item")
+    if custom_emoji_id:
+        kwargs["icon_custom_emoji_id"] = custom_emoji_id
+    return InlineKeyboardButton(
+        _schedule_picker_label(bot_data, sched_id, schedule),
+        **kwargs,
+    )
 
 
 async def scheduled_message_job(context: CallbackContext) -> None:
@@ -4183,18 +4212,21 @@ async def schedule_set_message(update: Update, context: CallbackContext) -> int:
     context.user_data["new_schedule_message"] = message.text if message else ""
     bot_data = context.application.bot_data
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(
-            _schedule_keyboard_label(bot_data, "schedule_once_button"),
+        [_schedule_keyboard_button(
+            bot_data,
+            "schedule_once_button",
             callback_data="sched_type_once",
             style="primary",
         )],
-        [InlineKeyboardButton(
-            _schedule_keyboard_label(bot_data, "schedule_daily_button"),
+        [_schedule_keyboard_button(
+            bot_data,
+            "schedule_daily_button",
             callback_data="sched_type_daily",
             style="primary",
         )],
-        [InlineKeyboardButton(
-            _schedule_keyboard_label(bot_data, "schedule_cancel_button"),
+        [_schedule_keyboard_button(
+            bot_data,
+            "schedule_cancel_button",
             callback_data="sched_cancel",
             style="danger",
         )],
@@ -4406,12 +4438,12 @@ async def _show_group_schedule_picker(
             int(item[1].get("hour", 0)), int(item[1].get("minute", 0)), item[0]
         ),
     ):
-        keyboard.append([InlineKeyboardButton(
-            _schedule_picker_label(bot_data, sched_id, sched),
-            callback_data=f"sched_remove_pick_{sched_id}",
-        )])
-    keyboard.append([InlineKeyboardButton(
-        _schedule_keyboard_label(bot_data, "schedule_remove_cancel_button"),
+        keyboard.append([
+            _schedule_picker_button(bot_data, sched_id, sched)
+        ])
+    keyboard.append([_schedule_keyboard_button(
+        bot_data,
+        "schedule_remove_cancel_button",
         callback_data="sched_remove_cancel",
         style="primary",
     )])
@@ -4482,13 +4514,15 @@ async def schedule_remove_text_handler(
 
     schedule_time = f"{int(schedule.get('hour', 0)):02d}:{int(schedule.get('minute', 0)):02d}"
     confirm_keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton(
-            _schedule_keyboard_label(bot_data, "schedule_delete_button"),
+        [_schedule_keyboard_button(
+            bot_data,
+            "schedule_delete_button",
             callback_data=f"sched_remove_delete_{sched_id}",
             style="danger",
         )],
-        [InlineKeyboardButton(
-            _schedule_keyboard_label(bot_data, "schedule_delete_cancel_button"),
+        [_schedule_keyboard_button(
+            bot_data,
+            "schedule_delete_cancel_button",
             callback_data="sched_remove_cancel",
             style="primary",
         )],
@@ -4585,13 +4619,15 @@ async def schedule_remove_callback(update: Update, context: CallbackContext) -> 
             return
         schedule_time = f"{int(schedule.get('hour', 0)):02d}:{int(schedule.get('minute', 0)):02d}"
         confirm_keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton(
-                _schedule_keyboard_label(bot_data, "schedule_delete_button"),
+            [_schedule_keyboard_button(
+                bot_data,
+                "schedule_delete_button",
                 callback_data=f"sched_remove_delete_{sched_id}",
                 style="danger",
             )],
-            [InlineKeyboardButton(
-                _schedule_keyboard_label(bot_data, "schedule_delete_cancel_button"),
+            [_schedule_keyboard_button(
+                bot_data,
+                "schedule_delete_cancel_button",
                 callback_data="sched_remove_cancel",
                 style="primary",
             )],

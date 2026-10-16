@@ -76,6 +76,73 @@ jobs:
               message_key="schedule_message_prompt",
           ) is None
 
+          # Schedule inline buttons must convert the configured custom-emoji
+          # entity into Telegram's native icon_custom_emoji_id field.
+          schedule_emoji_data = {"custom_msgs": {
+              "schedule_once_button": {
+                  "text": "🎯 One-time",
+                  "entities": [{"type": "custom_emoji", "offset": 0, "length": 2,
+                                "custom_emoji_id": "emoji-once"}],
+              },
+              "schedule_daily_button": {
+                  "text": "🔥 Every Day",
+                  "entities": [{"type": "custom_emoji", "offset": 0, "length": 2,
+                                "custom_emoji_id": "emoji-daily"}],
+              },
+              "schedule_cancel_button": {
+                  "text": "🎯 Cancel",
+                  "entities": [{"type": "custom_emoji", "offset": 0, "length": 2,
+                                "custom_emoji_id": "emoji-cancel"}],
+              },
+              "schedule_remove_cancel_button": {
+                  "text": "🎯 Cancel",
+                  "entities": [{"type": "custom_emoji", "offset": 0, "length": 2,
+                                "custom_emoji_id": "emoji-remove-cancel"}],
+              },
+              "schedule_delete_button": {
+                  "text": "🎯 Delete",
+                  "entities": [{"type": "custom_emoji", "offset": 0, "length": 2,
+                                "custom_emoji_id": "emoji-delete"}],
+              },
+              "schedule_delete_cancel_button": {
+                  "text": "🎯 Cancel",
+                  "entities": [{"type": "custom_emoji", "offset": 0, "length": 2,
+                                "custom_emoji_id": "emoji-delete-cancel"}],
+              },
+              "schedule_list_item": {
+                  "text": "🌟 {time} • {type} • {id}",
+                  "entities": [{"type": "custom_emoji", "offset": 0, "length": 2,
+                                "custom_emoji_id": "emoji-schedule-item"}],
+              },
+          }}
+          button_cases = [
+              ("schedule_once_button", "emoji-once", "One-time"),
+              ("schedule_daily_button", "emoji-daily", "Every Day"),
+              ("schedule_cancel_button", "emoji-cancel", "Cancel"),
+              ("schedule_remove_cancel_button", "emoji-remove-cancel", "Cancel"),
+              ("schedule_delete_button", "emoji-delete", "Delete"),
+              ("schedule_delete_cancel_button", "emoji-delete-cancel", "Cancel"),
+          ]
+          for key, expected_icon, expected_text in button_cases:
+              button = bot._schedule_keyboard_button(
+                  schedule_emoji_data, key,
+                  callback_data="schedule_test",
+              )
+              assert button.icon_custom_emoji_id == expected_icon
+              assert button.text == expected_text
+              assert "🎯" not in button.text
+
+          picker_button = bot._schedule_picker_button(
+              schedule_emoji_data,
+              "abc123",
+              {"hour": 2, "minute": 5, "type": "once", "message": "test"},
+          )
+          assert picker_button.icon_custom_emoji_id == "emoji-schedule-item"
+          assert "🌟" not in picker_button.text
+          assert picker_button.text.startswith("02:05")
+          assert "abc123" in picker_button.text
+          print("Schedule custom-emoji inline button regression checks passed.")
+
           # Register all handlers without making a Telegram API request or
           # starting polling. Capture the built Application to test dispatch.
           registered_applications = []
