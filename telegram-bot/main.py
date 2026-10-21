@@ -19,7 +19,7 @@ try:
 except Exception:
     langdetect_detect = None
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
+    AIORateLimiter, Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ConversationHandler,
     PicklePersistence, filters
 )
@@ -30,7 +30,7 @@ from telegram import (
     ReactionTypeEmoji, ReactionTypeCustomEmoji
 )
 from telegram.ext import CallbackContext
-from telegram.error import BadRequest
+from telegram.error import BadRequest, RetryAfter
 from web_server import keep_alive
 
 logging.basicConfig(
@@ -5360,6 +5360,17 @@ async def error_handler(update: object, context: CallbackContext) -> None:
 
     err = context.error
 
+    # AIORateLimiter retries RetryAfter responses before they reach this handler.
+    # If retries are exhausted, log the persistent rate limit without generating
+    # another Telegram alert that could itself be rate-limited.
+    if isinstance(err, RetryAfter):
+        logging.warning(
+            "Telegram rate limit persisted after automatic retries; "
+            "the affected operation may not have completed: %s",
+            err,
+        )
+        return
+
     if isinstance(err, Conflict):
         logging.warning("Telegram Conflict: another bot instance running.")
         return
@@ -5412,6 +5423,17 @@ def main():
     application = (
         Application.builder()
         .token(TOKEN)
+        # Conservative outbound limits for the bot and each group. RetryAfter
+        # responses are honored automatically, with a bounded number of retries.
+        .rate_limiter(
+            AIORateLimiter(
+                overall_max_rate=25,
+                overall_time_period=1,
+                group_max_rate=18,
+                group_time_period=60,
+                max_retries=3,
+            )
+        )
         .persistence(persistence)
         .post_init(post_init)
         .connect_timeout(30.0)
