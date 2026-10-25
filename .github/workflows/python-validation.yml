@@ -800,7 +800,8 @@ jobs:
               text=None,
               api_kwargs={"rich_message": article_incoming},
           )
-          assert rich_input_handler.check_update(rich_update_message)
+          rich_update = Update(update_id=9876543, message=rich_update_message)
+          assert rich_input_handler.check_update(rich_update)
 
           # Saving an Article stores both its full rich structure and a readable
           # preview, without needing MongoDB or a live Telegram API call.
