@@ -636,6 +636,103 @@ jobs:
           ) == "📅 Schedule Management\nManage this group's schedules privately with the bot."
           print("Handler registration and Schedule-only group keyboard checks passed.")
 
+          # Global schedule overview is visible only in the admin command menu and
+          # its handler is registered separately from the group-only /listschedules.
+          assert "allschedules" in {
+              command.command for command in bot._admin_bot_commands()
+          }
+          assert "allschedules" not in {
+              command.command for command in bot._public_bot_commands()
+          }
+          assert any(
+              isinstance(handler, bot.CommandHandler)
+              and "allschedules" in handler.commands
+              for handler in registered_app.handlers.get(0, [])
+          )
+
+          overview_schedules = {
+              "once-a": {
+                  "hour": 8, "minute": 5, "message": "One-time message",
+                  "group_ids": [-100, -200], "type": "once",
+              },
+              "daily-a": {
+                  "hour": 9, "minute": 30, "message": "Daily message",
+                  "group_ids": [-100], "type": "daily",
+              },
+              "unassigned-a": {
+                  "hour": 12, "minute": 0, "message": "Unassigned message",
+                  "group_ids": [], "type": "daily",
+              },
+          }
+          overview_lines = bot._build_schedule_overview_lines(
+              overview_schedules, tracked_group_ids=[-100, -200, -300]
+          )
+          overview_text = "\n".join(overview_lines)
+          assert "Unique schedules: 3 | Daily: 2 | One-time: 1" in overview_text
+          assert "Groups: 3 | Group schedule assignments: 3" in overview_text
+          assert "GROUP -100 — 2 total (Daily 1 | One-time 1)" in overview_text
+          assert "GROUP -200 — 1 total (Daily 0 | One-time 1)" in overview_text
+          assert "GROUP -300 — 0 total (Daily 0 | One-time 0)" in overview_text
+          assert "UNASSIGNED SCHEDULES — 1" in overview_text
+          assert "08:05 | ONE-TIME | ID once-a — One-time message" in overview_text
+          assert all(
+              len(chunk) <= 3500
+              for chunk in bot._chunk_schedule_overview(
+                  ["header"] + ["x" * 3000 for _ in range(3)]
+              )
+          )
+
+          # /allschedules responds in PM for ADMIN_IDS and remains silent for
+          # non-admins or an accidental group invocation.
+          class FakeOverviewMessage:
+              def __init__(self):
+                  self.sent = []
+              async def reply_text(self, text, **kwargs):
+                  self.sent.append(text)
+
+          overview_bot_data = {
+              "schedules": overview_schedules,
+              "groups": {-100, -200, -300},
+          }
+          overview_context = SimpleNamespace(
+              application=SimpleNamespace(bot_data=overview_bot_data)
+          )
+          admin_overview_message = FakeOverviewMessage()
+          admin_overview_update = SimpleNamespace(
+              effective_user=SimpleNamespace(id=bot.ADMIN_IDS[0]),
+              effective_chat=SimpleNamespace(type="private"),
+              effective_message=admin_overview_message,
+          )
+          asyncio.run(bot.allschedules_command(
+              admin_overview_update, overview_context
+          ))
+          admin_overview_text = "\n".join(admin_overview_message.sent)
+          assert "GLOBAL SCHEDULE OVERVIEW" in admin_overview_text
+          assert "GROUP -100" in admin_overview_text
+
+          denied_overview_message = FakeOverviewMessage()
+          denied_overview_update = SimpleNamespace(
+              effective_user=SimpleNamespace(id=987654321),
+              effective_chat=SimpleNamespace(type="private"),
+              effective_message=denied_overview_message,
+          )
+          asyncio.run(bot.allschedules_command(
+              denied_overview_update, overview_context
+          ))
+          assert denied_overview_message.sent == []
+
+          group_overview_message = FakeOverviewMessage()
+          group_overview_update = SimpleNamespace(
+              effective_user=SimpleNamespace(id=bot.ADMIN_IDS[0]),
+              effective_chat=SimpleNamespace(type="supergroup"),
+              effective_message=group_overview_message,
+          )
+          asyncio.run(bot.allschedules_command(
+              group_overview_update, overview_context
+          ))
+          assert group_overview_message.sent == []
+          print("Admin-only global Schedule overview tests passed.")
+
           # Schedule PM links are short, one-use, user-bound, and group/action scoped.
           set_link = bot._create_schedule_pm_token(111, -222, "set")
           assert len(set_link) <= 64 and set_link.startswith("sched_")
