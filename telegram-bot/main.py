@@ -1553,6 +1553,10 @@ async def setmsg_select(update: Update, context: CallbackContext) -> int:
     else:
         current = stored.get("text") or DEFAULT_MSGS.get(key, "(default)")
         current_entities = stored.get("entities")
+    article_note = (
+        "📄 လက်ရှိ message တွင် Telegram Article formatting ပါရှိသည်။\n"
+        if stored.get("rich_message") else ""
+    )
 
     if key in {"confirm_button", "cancel_button"}:
         await query.edit_message_text(
@@ -1593,7 +1597,8 @@ async def setmsg_select(update: Update, context: CallbackContext) -> int:
         )
         suffix = (
             "\n\n"
-            "✏️ အသစ်ရိုက်ထည့်ပါ (Premium animated emoji ပါ တိုက်ရိုက်ထည့်နိုင်သည်)\n\n"
+            "✏️ အသစ်ရိုက်ထည့်ပါ (Premium animated emoji ပါ တိုက်ရိုက်ထည့်နိုင်သည်)\n"
+            "📄 Telegram ရှိ Attach → Article မှ ပို့လျှင် formatting, headings, lists, tables, formulas နှင့် media များကို သိမ်းနိုင်သည်။\n\n"
             "/reset — default ပြန်ထား\n"
             "/cancel — ဖျက်သိမ်း"
         )
@@ -1618,8 +1623,10 @@ async def setmsg_select(update: Update, context: CallbackContext) -> int:
     await query.edit_message_text(
         f"📝 <b>{label}</b>\n\n"
         f"<b>လက်ရှိ message:</b>\n"
-        f"<blockquote>{current[:800]}</blockquote>\n\n"
-        "✏️ အသစ်ရိုက်ထည့်ပါ (Premium animated emoji ပါ တိုက်ရိုက်ထည့်နိုင်သည်)\n\n"
+        f"<blockquote>{html_escape(current[:800])}</blockquote>\n\n"
+        f"{article_note}"
+        "✏️ အသစ်ရိုက်ထည့်ပါ (Premium animated emoji ပါ တိုက်ရိုက်ထည့်နိုင်သည်)\n"
+        "📄 Telegram ရှိ Attach → Article မှ ပို့လျှင် formatting, headings, lists, tables, formulas နှင့် media များကို သိမ်းနိုင်သည်။\n\n"
         "<i>/reset — default ပြန်ထား</i>\n"
         "<i>/cancel — ဖျက်သိမ်း</i>",
         parse_mode="HTML"
@@ -1630,6 +1637,8 @@ async def setmsg_select(update: Update, context: CallbackContext) -> int:
 async def setmsg_receive(update: Update, context: CallbackContext) -> int:
     msg = update.message
     text = msg.text or ""
+    incoming_rich = _incoming_rich_message(msg)
+    normalized_rich = None
 
     if text.strip() in ("/cancel", "cancel"):
         await msg.reply_text("❌ ဖျက်သိမ်းလိုက်ပါသည်။")
@@ -1639,6 +1648,31 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
     if not key:
         await msg.reply_text("❌ Session expired. /setmsg ထပ်စမ်းပါ။")
         return ConversationHandler.END
+
+    if incoming_rich is not None:
+        if key in _RICH_TEXT_ONLY_KEYS:
+            await msg.reply_text(
+                "❌ ဒီ setting က button label၊ emoji သို့မဟုတ် link field ဖြစ်သောကြောင့် "
+                "Telegram Article မသုံးနိုင်ပါ။ Plain text သို့မဟုတ် emoji ကို ပို့ပါ။"
+            )
+            return SETMSG_AWAIT
+        try:
+            normalized_rich = _normalize_rich_message_for_input(incoming_rich)
+        except (TypeError, ValueError) as exc:
+            logging.warning("Rejected unsupported /setmsg Article: %s", exc)
+            await msg.reply_text(
+                "❌ Article content ကို မသိမ်းနိုင်ပါ။ Telegram Article ထဲတွင် "
+                "text, heading, list, table, quotation, formula နှင့် supported media blocks များကို "
+                "အသုံးပြုပြီး ပြန်ပို့ပါ။"
+            )
+            return SETMSG_AWAIT
+        text = _rich_message_plain_text(normalized_rich) or "[Telegram Article content]"
+
+    if not text.strip():
+        await msg.reply_text(
+            "❌ Plain text သို့မဟုတ် Telegram ရှိ Attach → Article မှပို့ထားသော Article ကို ပို့ပါ။"
+        )
+        return SETMSG_AWAIT
 
     if key in {"confirm_button", "cancel_button"}:
         if (
@@ -1760,6 +1794,9 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
     if key in _CUSTOM_KEYBOARD_BUTTON_KEYS:
         _remember_schedule_button_alias(context.application.bot_data, key)
     message_config = {"text": text, "entities": entities_raw}
+    if normalized_rich is not None:
+        message_config["rich_message"] = normalized_rich
+        message_config["entities"] = None
     if key == "form":
         # /form now stores the complete user-provided message, including all
         # report fields after the intro.
@@ -1778,6 +1815,16 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
         )
 
     label = CUSTOM_MSG_LABELS.get(key, key)
+    if normalized_rich is not None:
+        preview = html_escape(text[:350])
+        article_preview = f"\n\n<blockquote>{preview}</blockquote>" if preview else ""
+        await msg.reply_text(
+            f"✅ <b>{html_escape(label)}</b> — Telegram Article formatting ပါဝင်သော "
+            f"content ကို သိမ်းဆည်းပြီးပါပြီ။{article_preview}",
+            parse_mode="HTML",
+        )
+        return ConversationHandler.END
+
     emoji_note = " ✨ (Premium emoji သိမ်းဆည်းပြီး)" if entities_raw else ""
     confirmation_prefix = f"✅ {label} — သိမ်းဆည်းပြီးပါပြီ!{emoji_note}\n\n"
     confirmation_text = confirmation_prefix + text[:500]
@@ -6036,7 +6083,7 @@ def main():
             SETMSG_AWAIT: [
                 CommandHandler("reset", setmsg_receive),
                 CommandHandler("cancel", setmsg_cancel_conv),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, setmsg_receive),
+                MessageHandler(filters.ALL & ~filters.COMMAND, setmsg_receive),
             ],
         },
         fallbacks=[
