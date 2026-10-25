@@ -45,6 +45,7 @@ jobs:
           from pathlib import Path
           from types import SimpleNamespace
           from telegram import Chat, Message, MessageEntity, Update, User
+          from telegram.error import RetryAfter
 
           sys.path.insert(0, "telegram-bot")
           import main as bot
@@ -157,6 +158,9 @@ jobs:
 
           assert len(registered_applications) == 1
           registered_app = registered_applications[0]
+          # Ensure bounded automatic Telegram Flood Control retries are active.
+          assert isinstance(registered_app.bot.rate_limiter, bot.AIORateLimiter)
+          assert registered_app.bot.rate_limiter.max_retries == 3
           setmsg_handler = next(
               handler
               for handler in registered_app.handlers.get(0, [])
@@ -774,6 +778,19 @@ jobs:
           assert "Entity_text_invalid: <6 & unsafe" in admin_report["text"]
           assert "parse_mode" not in admin_report
           print("Plain-text admin error reporting regression test passed.")
+
+          # Exhausted Flood Control retries are logged, not sent as another
+          # Telegram message that may trigger the same rate limit.
+          retry_ctx = FakeContext()
+          retry_ctx.error = RetryAfter(8)
+          original_admin_ids = bot.ADMIN_IDS
+          try:
+              bot.ADMIN_IDS = [123456789]
+              asyncio.run(bot.error_handler(None, retry_ctx))
+          finally:
+              bot.ADMIN_IDS = original_admin_ids
+          assert retry_ctx.application.bot.sent == []
+          print("Flood Control retry/notification regression test passed.")
 
           # Regression: a clean Render shutdown must not restart the same poller
           # inside a closed event loop.
