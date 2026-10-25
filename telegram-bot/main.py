@@ -4857,7 +4857,7 @@ def _chunk_schedule_overview(lines: list[str], max_chars: int = 3500) -> list[st
     for line in lines:
         line_length = len(line) + (1 if current_lines else 0)
         if current_lines and current_length + line_length > max_chars:
-            chunks.append("\\n".join(current_lines))
+            chunks.append("\n".join(current_lines))
             current_lines = [line]
             current_length = len(line)
         else:
@@ -4865,8 +4865,8 @@ def _chunk_schedule_overview(lines: list[str], max_chars: int = 3500) -> list[st
             current_length += line_length
 
     if current_lines:
-        chunks.append("\\n".join(current_lines))
-    return chunks or ["📅 GLOBAL SCHEDULE OVERVIEW\\nNo schedule entries found."]
+        chunks.append("\n".join(current_lines))
+    return chunks or ["📅 GLOBAL SCHEDULE OVERVIEW\nNo schedule entries found."]
 
 
 async def allschedules_command(update: Update, context: CallbackContext) -> None:
@@ -5727,7 +5727,11 @@ def main():
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("listusers", list_users))
     application.add_handler(CommandHandler("listgroups", list_groups))
-    application.add_handler(CommandHandler("allschedules", allschedules_command, filters=filters.ChatType.PRIVATE))
+    application.add_handler(
+        CommandHandler(
+            "allschedules", allschedules_command, filters=filters.ChatType.PRIVATE
+        )
+    )
     application.add_handler(CommandHandler("listschedules", listschedules_command))
     application.add_handler(CommandHandler("removeschedule", removeschedule_command))
     application.add_handler(CommandHandler("admin", admin_command))
