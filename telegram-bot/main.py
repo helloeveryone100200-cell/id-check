@@ -24,7 +24,7 @@ from telegram.ext import (
     PicklePersistence, filters
 )
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup,
+    Update, Message, InlineKeyboardButton, InlineKeyboardMarkup,
     KeyboardButton, ReplyKeyboardMarkup,
     InputFile, BotCommand, BotCommandScopeChat, BotCommandScopeAllGroupChats, MessageEntity,
     ReactionTypeEmoji, ReactionTypeCustomEmoji
@@ -856,6 +856,379 @@ def _plus_reaction_confirmation(config: dict) -> tuple[str, list | None]:
         item["offset"] = int(item.get("offset", 0)) + prefix_units
         shifted.append(item)
     return text, _build_entities(shifted)
+
+
+
+
+# ============================================================
+# TELEGRAM ARTICLE / RICH MESSAGE SUPPORT FOR /setmsg
+# ============================================================
+
+_RICH_MESSAGE_TEXT_FIELDS = {
+    "text", "expression", "summary", "caption", "credit", "label", "value",
+}
+_RICH_INPUT_BLOCK_TYPES = {
+    "paragraph": {"text"},
+    "heading": {"text", "size"},
+    "pre": {"text", "language"},
+    "footer": {"text"},
+    "divider": set(),
+    "mathematical_expression": {"expression"},
+    "anchor": {"name"},
+    "list": {"items"},
+    "blockquote": {"blocks", "credit"},
+    "expandable_blockquote": {"text", "credit"},
+    "pullquote": {"text", "credit"},
+    "collage": {"blocks", "caption"},
+    "slideshow": {"blocks", "caption"},
+    "table": {"cells", "is_bordered", "is_striped", "is_compact", "caption"},
+    "details": {"summary", "blocks", "is_open"},
+    "map": {"location", "zoom", "width", "height", "caption"},
+    "buttons": {"buttons", "align"},
+}
+_RICH_INPUT_MEDIA_BLOCKS = {
+    "photo": "photo",
+    "animation": "animation",
+    "audio": "audio",
+    "document": "document",
+    "video": "video",
+    "voice_note": "voice_note",
+}
+_RICH_MESSAGE_MAX_BYTES = 1_500_000
+_RICH_MESSAGE_MAX_BLOCKS = 500
+_RICH_MESSAGE_MAX_DEPTH = 16
+_RICH_TEXT_ONLY_KEYS = (
+    _CUSTOM_KEYBOARD_BUTTON_KEYS
+    | {
+        "confirm_button", "cancel_button", "number_words_link",
+        "digit_emoji", "plus_reaction",
+        "schedule_set_command_description",
+        "schedule_remove_command_description",
+        "schedule_list_command_description",
+    }
+)
+
+
+def _incoming_rich_message(message) -> dict | None:
+    """Read Message.rich_message from PTB's unknown-field api_kwargs."""
+    raw_kwargs = getattr(message, "api_kwargs", None) or {}
+    if not isinstance(raw_kwargs, dict):
+        return None
+    value = raw_kwargs.get("rich_message")
+    return value if isinstance(value, dict) else None
+
+
+def _copy_rich_json(value, depth: int = 0):
+    """Copy JSON-safe rich content and guard against malformed nesting."""
+    if depth > _RICH_MESSAGE_MAX_DEPTH + 4:
+        raise ValueError("Article content has too many nested levels")
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, list):
+        if len(value) > _RICH_MESSAGE_MAX_BLOCKS:
+            raise ValueError("Article content contains too many items")
+        return [_copy_rich_json(item, depth + 1) for item in value]
+    if isinstance(value, dict):
+        if len(value) > 100:
+            raise ValueError("Article content contains an oversized object")
+        return {
+            str(key): _copy_rich_json(item, depth + 1)
+            for key, item in value.items()
+            if isinstance(key, str)
+        }
+    raise ValueError("Article contains a non-JSON value")
+
+
+def _rich_media_file_id(media_value, media_kind: str) -> str:
+    """Select a reusable file_id from media echoed back by Telegram."""
+    candidates = media_value if isinstance(media_value, list) else [media_value]
+    choices = [
+        item for item in candidates
+        if isinstance(item, dict)
+        and isinstance(item.get("file_id"), str)
+        and item.get("file_id")
+    ]
+    if not choices:
+        raise ValueError(f"Article {media_kind} block has no reusable file_id")
+    if media_kind == "photo":
+        selected = max(
+            choices,
+            key=lambda item: int(item.get("width", 0) or 0)
+            * int(item.get("height", 0) or 0),
+        )
+    else:
+        selected = choices[0]
+    return selected["file_id"]
+
+
+def _normalize_rich_block(block: dict, counter: list[int], depth: int = 0) -> dict:
+    """Convert a received RichBlock to a valid InputRichBlock."""
+    if depth > _RICH_MESSAGE_MAX_DEPTH:
+        raise ValueError("Article content exceeds Telegram's nesting limit")
+    if not isinstance(block, dict):
+        raise ValueError("Article contains a malformed content block")
+    counter[0] += 1
+    if counter[0] > _RICH_MESSAGE_MAX_BLOCKS:
+        raise ValueError("Article contains too many content blocks")
+
+    block_type = block.get("type")
+    if not isinstance(block_type, str):
+        raise ValueError("Article contains an untyped content block")
+
+    if block_type in _RICH_INPUT_MEDIA_BLOCKS:
+        file_id = _rich_media_file_id(block.get(block_type), block_type)
+        media = {"type": block_type, "media": file_id}
+        if block.get("has_spoiler") is True and block_type in {
+            "photo", "video", "animation"
+        }:
+            media["has_spoiler"] = True
+        normalized = {"type": block_type, block_type: media}
+        if "caption" in block:
+            normalized["caption"] = _copy_rich_json(block["caption"])
+        return normalized
+
+    if block_type not in _RICH_INPUT_BLOCK_TYPES:
+        raise ValueError(f"Unsupported Article block type: {block_type}")
+
+    allowed = _RICH_INPUT_BLOCK_TYPES[block_type]
+    normalized = {"type": block_type}
+
+    if block_type in {"collage", "slideshow", "blockquote", "details"}:
+        children = block.get("blocks", [])
+        if not isinstance(children, list):
+            raise ValueError("Article contains a malformed nested block list")
+        normalized["blocks"] = [
+            _normalize_rich_block(child, counter, depth + 1)
+            for child in children
+        ]
+        for key in allowed - {"blocks", "type"}:
+            if key in block:
+                normalized[key] = _copy_rich_json(block[key])
+        return normalized
+
+    if block_type == "list":
+        items = block.get("items", [])
+        if not isinstance(items, list):
+            raise ValueError("Article contains a malformed list")
+        normalized_items = []
+        for raw_item in items:
+            if not isinstance(raw_item, dict) or not isinstance(raw_item.get("blocks", []), list):
+                raise ValueError("Article contains a malformed list item")
+            item_blocks = []
+            label = raw_item.get("label")
+            # RichBlockListItem.label is output-only; retain it as a paragraph.
+            if isinstance(label, str) and label:
+                counter[0] += 1
+                if counter[0] > _RICH_MESSAGE_MAX_BLOCKS:
+                    raise ValueError("Article contains too many content blocks")
+                item_blocks.append({"type": "paragraph", "text": label})
+            item_blocks.extend(
+                _normalize_rich_block(child, counter, depth + 1)
+                for child in raw_item.get("blocks", [])
+            )
+            item = {"blocks": item_blocks}
+            for key in ("has_checkbox", "is_checked", "value", "type"):
+                if key in raw_item:
+                    item[key] = _copy_rich_json(raw_item[key])
+            normalized_items.append(item)
+        normalized["items"] = normalized_items
+        return normalized
+
+    if block_type == "table":
+        raw_rows = block.get("cells", [])
+        if not isinstance(raw_rows, list):
+            raise ValueError("Article table is malformed")
+        normalized_rows = []
+        for raw_row in raw_rows:
+            if not isinstance(raw_row, list):
+                raise ValueError("Article table row is malformed")
+            row = []
+            for cell in raw_row:
+                if not isinstance(cell, dict):
+                    raise ValueError("Article table cell is malformed")
+                row.append({
+                    key: _copy_rich_json(value)
+                    for key, value in cell.items()
+                    if key in {"text", "is_header", "colspan", "rowspan", "align", "valign"}
+                })
+            normalized_rows.append(row)
+        normalized["cells"] = normalized_rows
+        for key in allowed - {"cells", "type"}:
+            if key in block:
+                normalized[key] = _copy_rich_json(block[key])
+        return normalized
+
+    if block_type == "buttons":
+        raw_buttons = block.get("buttons", [])
+        if not isinstance(raw_buttons, list):
+            raise ValueError("Article button row is malformed")
+        button_fields = {
+            "text", "style", "url", "callback_data", "web_app", "login_url",
+            "switch_inline_query", "switch_inline_query_current_chat",
+            "switch_inline_query_chosen_chat", "copy_text", "disabled",
+        }
+        buttons = []
+        for raw_button in raw_buttons:
+            if not isinstance(raw_button, dict):
+                raise ValueError("Article contains a malformed rich button")
+            buttons.append({
+                key: _copy_rich_json(value)
+                for key, value in raw_button.items()
+                if key in button_fields
+            })
+        normalized["buttons"] = buttons
+        if "align" in block:
+            normalized["align"] = _copy_rich_json(block["align"])
+        return normalized
+
+    for key in allowed:
+        if key not in block:
+            continue
+        if key == "location":
+            location = block[key]
+            if not isinstance(location, dict) or not {
+                "latitude", "longitude"
+            }.issubset(location):
+                raise ValueError("Article map block is missing coordinates")
+            normalized[key] = {
+                "latitude": location["latitude"],
+                "longitude": location["longitude"],
+            }
+        else:
+            normalized[key] = _copy_rich_json(block[key])
+    return normalized
+
+
+def _normalize_rich_message_for_input(raw_rich_message: dict) -> dict:
+    """Validate and convert a received Article to an outgoing rich-message payload."""
+    if not isinstance(raw_rich_message, dict):
+        raise ValueError("Article content is missing")
+    try:
+        raw_size = len(json.dumps(
+            raw_rich_message, ensure_ascii=False, separators=(",", ":")
+        ).encode("utf-8"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Article content is not valid JSON") from exc
+    if raw_size > _RICH_MESSAGE_MAX_BYTES:
+        raise ValueError("Article content is too large to save safely")
+
+    raw_blocks = raw_rich_message.get("blocks")
+    if not isinstance(raw_blocks, list) or not raw_blocks:
+        raise ValueError("Article has no supported content blocks")
+    counter = [0]
+    output = {
+        "blocks": [
+            _normalize_rich_block(block, counter)
+            for block in raw_blocks
+        ]
+    }
+    if raw_rich_message.get("is_rtl") is True:
+        output["is_rtl"] = True
+    return output
+
+
+def _replace_rich_placeholders(value, fmt: dict, parent_key: str | None = None):
+    """Replace known placeholders only inside text values, never URLs/file IDs."""
+    if isinstance(value, str):
+        return (
+            _safe_substitute(value, **fmt)
+            if parent_key in _RICH_MESSAGE_TEXT_FIELDS else value
+        )
+    if isinstance(value, list):
+        return [_replace_rich_placeholders(item, fmt, parent_key) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _replace_rich_placeholders(item, fmt, key)
+            for key, item in value.items()
+        }
+    return value
+
+
+def _rich_message_plain_text(rich_message: dict, limit: int = 1000) -> str:
+    """Create a safe preview for current-message prompts and old helpers."""
+    fragments = []
+
+    def visit(value, key=None):
+        if isinstance(value, str):
+            if key in _RICH_MESSAGE_TEXT_FIELDS and value.strip():
+                fragments.append(value.strip())
+        elif isinstance(value, list):
+            for item in value:
+                visit(item, key)
+        elif isinstance(value, dict):
+            for child_key, child in value.items():
+                visit(child, child_key)
+
+    visit(rich_message.get("blocks", []), "blocks")
+    return " ".join(" ".join(fragments).split())[:limit]
+
+
+def _prepare_stored_rich_message(
+    stored: dict, fmt: dict | None = None, suffix: str = ""
+) -> dict | None:
+    """Copy saved Article content and apply runtime placeholders to text only."""
+    raw = stored.get("rich_message") if isinstance(stored, dict) else None
+    if not isinstance(raw, dict) or not isinstance(raw.get("blocks"), list):
+        return None
+    try:
+        rich = _copy_rich_json(_replace_rich_placeholders(raw, fmt or {}))
+        if suffix:
+            if len(rich["blocks"]) >= _RICH_MESSAGE_MAX_BLOCKS:
+                raise ValueError("Article has no room for the appended text")
+            rich["blocks"].append({"type": "paragraph", "text": suffix})
+        return rich if rich.get("blocks") else None
+    except (TypeError, ValueError) as exc:
+        logging.warning("Stored Article is invalid; using text fallback: %s", exc)
+        return None
+
+
+async def _send_rich_message_reply(target_message, rich_message: dict, reply_markup=None):
+    """Send a saved Article as a reply using PTB's raw Bot API request."""
+    bot = target_message.get_bot()
+    payload = {"chat_id": target_message.chat_id, "rich_message": rich_message}
+    thread_id = getattr(target_message, "message_thread_id", None)
+    if thread_id is not None:
+        payload["message_thread_id"] = thread_id
+    chat = getattr(target_message, "chat", None)
+    if (
+        chat is not None
+        and getattr(chat, "type", None) in {"group", "supergroup"}
+        and getattr(target_message, "message_id", None) is not None
+    ):
+        payload["reply_parameters"] = {"message_id": target_message.message_id}
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
+    await bot.do_api_request(
+        endpoint="send_rich_message", api_kwargs=payload, return_type=Message
+    )
+
+
+async def _send_rich_message_to_chat(bot, chat_id: int, rich_message: dict, reply_markup=None):
+    """Send a saved Article to a chat."""
+    payload = {"chat_id": chat_id, "rich_message": rich_message}
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
+    await bot.do_api_request(
+        endpoint="send_rich_message", api_kwargs=payload, return_type=Message
+    )
+
+
+async def _edit_rich_message(query, rich_message: dict, reply_markup=None):
+    """Edit a message into Article format using the Bot API rich_message field."""
+    payload = {"rich_message": rich_message}
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
+    if getattr(query, "inline_message_id", None):
+        payload["inline_message_id"] = query.inline_message_id
+    else:
+        message = getattr(query, "message", None)
+        if message is None:
+            raise ValueError("The target message is unavailable for rich editing")
+        payload["chat_id"] = message.chat_id
+        payload["message_id"] = message.message_id
+    await query.get_bot().do_api_request(
+        endpoint="edit_message_text", api_kwargs=payload
+    )
 
 
 async def _reply_custom(target_message, bot_data: dict, key: str,
