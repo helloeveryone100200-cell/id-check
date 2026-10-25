@@ -733,6 +733,149 @@ jobs:
           assert group_overview_message.sent == []
           print("Admin-only global Schedule overview tests passed.")
 
+          # Regression: Telegram Article/RichMessage input is normalized to the
+          # current InputRichMessage schema, preserving formatting blocks/media.
+          article_incoming = {
+              "blocks": [
+                  {"type": "heading", "size": 1,
+                   "text": {"type": "bold", "text": "Hello {name}"}},
+                  {"type": "paragraph",
+                   "text": {"type": "url", "text": "Open link",
+                            "url": "https://example.com/{name}"}},
+                  {"type": "list", "items": [
+                      {"label": "First item",
+                       "blocks": [{"type": "paragraph", "text": "Item {name}"}]},
+                  ]},
+                  {"type": "table", "is_bordered": True, "is_compact": True,
+                   "cells": [[
+                       {"text": "Heading", "is_header": True},
+                       {"text": "Value"},
+                   ]]},
+                  {"type": "mathematical_expression", "expression": "x^2+1"},
+                  {"type": "photo", "has_spoiler": True, "photo": [
+                      {"file_id": "small-photo-id", "width": 20, "height": 20},
+                      {"file_id": "large-photo-id", "width": 200, "height": 200},
+                  ]},
+                  {"type": "video", "video": {"file_id": "article-video-id"}},
+              ],
+          }
+          normalized_article = bot._normalize_rich_message_for_input(article_incoming)
+          assert normalized_article["blocks"][0]["type"] == "heading"
+          assert normalized_article["blocks"][0]["text"]["text"] == "Hello {name}"
+          assert normalized_article["blocks"][1]["text"]["url"] == "https://example.com/{name}"
+          assert normalized_article["blocks"][2]["items"][0]["blocks"][0]["text"] == "First item"
+          assert normalized_article["blocks"][3]["is_compact"] is True
+          assert normalized_article["blocks"][4]["expression"] == "x^2+1"
+          assert normalized_article["blocks"][5]["photo"] == {
+              "type": "photo", "media": "large-photo-id", "has_spoiler": True
+          }
+          assert normalized_article["blocks"][6]["video"] == {
+              "type": "video", "media": "article-video-id"
+          }
+
+          # Runtime placeholders are applied inside rich text but never inside URLs.
+          rich_runtime = bot._prepare_stored_rich_message(
+              {"rich_message": normalized_article}, {"name": "Owner"}, suffix="Thank you"
+          )
+          assert rich_runtime["blocks"][0]["text"]["text"] == "Hello Owner"
+          assert rich_runtime["blocks"][1]["text"]["url"] == "https://example.com/{name}"
+          assert rich_runtime["blocks"][-1] == {
+              "type": "paragraph", "text": "Thank you"
+          }
+          assert normalized_article["blocks"][0]["text"]["text"] == "Hello {name}"
+
+          # The standard setmsg handler must accept messages that contain a
+          # rich_message payload even if the plain Message.text field is absent.
+          rich_input_handler = next(
+              handler
+              for handler in setmsg_handler.states[bot.SETMSG_AWAIT]
+              if isinstance(handler, bot.MessageHandler)
+              and handler.callback is bot.setmsg_receive
+          )
+          rich_update_message = Message(
+              message_id=987,
+              date=datetime.now(timezone.utc),
+              chat=Chat(id=123456, type="private"),
+              from_user=User(id=123456, first_name="Owner", is_bot=False),
+              text=None,
+              api_kwargs={"rich_message": article_incoming},
+          )
+          rich_update = Update(update_id=9876543, message=rich_update_message)
+          assert rich_input_handler.check_update(rich_update)
+
+          # Saving an Article stores both its full rich structure and a readable
+          # preview, without needing MongoDB or a live Telegram API call.
+          class FakeArticleInputMessage:
+              def __init__(self):
+                  self.text = None
+                  self.entities = None
+                  self.api_kwargs = {"rich_message": article_incoming}
+                  self.sent = []
+              async def reply_text(self, text, **kwargs):
+                  self.sent.append((text, kwargs))
+
+          article_input_message = FakeArticleInputMessage()
+          article_bot_data = {"custom_msgs": {}}
+          article_context = SimpleNamespace(
+              user_data={"setmsg_key": "welcome"},
+              application=SimpleNamespace(bot_data=article_bot_data, persistence=None),
+          )
+          article_update = SimpleNamespace(
+              message=article_input_message,
+              effective_user=SimpleNamespace(id=bot.ADMIN_IDS[0]),
+              effective_chat=SimpleNamespace(type="private"),
+          )
+          original_save_bot_config = bot.save_bot_config_to_mongo
+          try:
+              bot.save_bot_config_to_mongo = lambda *_args, **_kwargs: True
+              result = asyncio.run(bot.setmsg_receive(article_update, article_context))
+          finally:
+              bot.save_bot_config_to_mongo = original_save_bot_config
+          assert result == bot.ConversationHandler.END
+          saved_article = article_bot_data["custom_msgs"]["welcome"]
+          assert saved_article["rich_message"]["blocks"][0]["type"] == "heading"
+          assert "Hello {name}" in saved_article["text"]
+          assert saved_article["entities"] is None
+          assert "Article formatting" in article_input_message.sent[0][0]
+
+          # Sending a saved Article routes to sendRichMessage and retains the
+          # current group reply/thread context. Legacy text continues to use
+          # normal reply_text (covered by existing smoke tests).
+          class FakeRichBot:
+              def __init__(self):
+                  self.calls = []
+              async def do_api_request(self, **kwargs):
+                  self.calls.append(kwargs)
+
+          fake_rich_bot = FakeRichBot()
+          class FakeRichTarget:
+              chat_id = -100123
+              message_id = 345
+              message_thread_id = 44
+              chat = SimpleNamespace(type="supergroup")
+              def get_bot(self):
+                  return fake_rich_bot
+
+          rich_target = FakeRichTarget()
+          asyncio.run(bot._reply_custom(
+              rich_target,
+              {"custom_msgs": {"welcome": saved_article}},
+              "welcome",
+              name="Group",
+              suffix="Start here",
+          ))
+          assert len(fake_rich_bot.calls) == 1
+          rich_call = fake_rich_bot.calls[0]
+          assert rich_call["endpoint"] == "send_rich_message"
+          assert rich_call["api_kwargs"]["chat_id"] == -100123
+          assert rich_call["api_kwargs"]["message_thread_id"] == 44
+          assert rich_call["api_kwargs"]["reply_parameters"] == {"message_id": 345}
+          sent_rich = rich_call["api_kwargs"]["rich_message"]
+          assert sent_rich["blocks"][0]["text"]["text"] == "Hello Group"
+          assert sent_rich["blocks"][-1] == {"type": "paragraph", "text": "Start here"}
+          assert "Hello {name}" in saved_article["text"]
+          print("Telegram Article setmsg/save/send regression tests passed.")
+
           # Schedule PM links are short, one-use, user-bound, and group/action scoped.
           set_link = bot._create_schedule_pm_token(111, -222, "set")
           assert len(set_link) <= 64 and set_link.startswith("sched_")
