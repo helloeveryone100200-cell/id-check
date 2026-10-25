@@ -160,7 +160,7 @@ jobs:
           registered_app = registered_applications[0]
           # Ensure bounded automatic Telegram Flood Control retries are active.
           assert isinstance(registered_app.bot.rate_limiter, bot.AIORateLimiter)
-          assert registered_app.bot.rate_limiter.max_retries == 3
+          assert registered_app.bot.rate_limiter._max_retries == 3
           setmsg_handler = next(
               handler
               for handler in registered_app.handlers.get(0, [])
