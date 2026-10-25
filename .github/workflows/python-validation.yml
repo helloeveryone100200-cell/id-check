@@ -43,7 +43,7 @@ jobs:
           import sys
           from datetime import datetime, timezone
           from pathlib import Path
-          from types import SimpleNamespace
+          from types import MappingProxyType, SimpleNamespace
           from telegram import Chat, Message, MessageEntity, Update, User
           from telegram.error import RetryAfter
 
@@ -800,6 +800,9 @@ jobs:
               text=None,
               api_kwargs={"rich_message": article_incoming},
           )
+          # PTB exposes TelegramObject.api_kwargs as a read-only MappingProxyType.
+          assert isinstance(rich_update_message.api_kwargs, MappingProxyType)
+          assert bot._incoming_rich_message(rich_update_message) == article_incoming
           rich_update = Update(update_id=9876543, message=rich_update_message)
           assert rich_input_handler.check_update(rich_update)
 
@@ -809,7 +812,7 @@ jobs:
               def __init__(self):
                   self.text = None
                   self.entities = None
-                  self.api_kwargs = {"rich_message": article_incoming}
+                  self.api_kwargs = MappingProxyType({"rich_message": article_incoming})
                   self.sent = []
               async def reply_text(self, text, **kwargs):
                   self.sent.append((text, kwargs))

@@ -5,6 +5,7 @@ import math
 import logging
 import asyncio
 import secrets
+from collections.abc import Mapping
 from html import escape as html_escape
 import threading
 import pytz
@@ -921,12 +922,14 @@ _RICH_TEXT_ONLY_KEYS = (
 
 
 def _incoming_rich_message(message) -> dict | None:
-    """Read Message.rich_message from PTB's unknown-field api_kwargs."""
-    raw_kwargs = getattr(message, "api_kwargs", None) or {}
-    if not isinstance(raw_kwargs, dict):
+    """Read Message.rich_message from PTB's read-only unknown-field mapping."""
+    raw_kwargs = getattr(message, "api_kwargs", None)
+    if not isinstance(raw_kwargs, Mapping):
         return None
     value = raw_kwargs.get("rich_message")
-    return value if isinstance(value, dict) else None
+    if isinstance(value, Mapping):
+        return dict(value)
+    return None
 
 
 def _copy_rich_json(value, depth: int = 0):
@@ -1129,8 +1132,9 @@ def _normalize_rich_block(block: dict, counter: list[int], depth: int = 0) -> di
 
 def _normalize_rich_message_for_input(raw_rich_message: dict) -> dict:
     """Validate and convert a received Article to an outgoing rich-message payload."""
-    if not isinstance(raw_rich_message, dict):
+    if not isinstance(raw_rich_message, Mapping):
         raise ValueError("Article content is missing")
+    raw_rich_message = dict(raw_rich_message)
     try:
         raw_size = len(json.dumps(
             raw_rich_message, ensure_ascii=False, separators=(",", ":")
