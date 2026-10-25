@@ -728,6 +728,7 @@ def _admin_bot_commands() -> list[BotCommand]:
         BotCommand("stats", "Bot stats (Admin)"),
         BotCommand("listusers", "User list (Admin)"),
         BotCommand("listgroups", "Group list (Admin)"),
+        BotCommand("allschedules", "Global Schedule overview (Admin PM)"),
         BotCommand("admin", "Admin panel (Admin)"),
         BotCommand("clearall", "Clear all data (Admin PM)"),
         BotCommand("resetplusall", "Reset all plus counters (Admin PM)"),
@@ -4729,6 +4730,165 @@ async def listschedules_command(update: Update, context: CallbackContext) -> Non
     )
 
 
+def _build_schedule_overview_lines(
+    schedules: dict, tracked_group_ids=()
+) -> list[str]:
+    """Build a read-only global schedule report, grouped by Telegram chat ID."""
+    records = []
+    groups = {}
+
+    try:
+        tracked_ids = list(tracked_group_ids or [])
+    except TypeError:
+        tracked_ids = []
+
+    for group_id in tracked_ids:
+        if group_id is not None and str(group_id).strip():
+            groups.setdefault(str(group_id), [])
+
+    schedule_items = schedules.items() if isinstance(schedules, dict) else []
+    for raw_schedule_id, schedule in sorted(
+        schedule_items, key=lambda item: str(item[0])
+    ):
+        if not isinstance(schedule, dict):
+            continue
+
+        schedule_id = str(raw_schedule_id)[:64]
+        try:
+            hour = int(schedule.get("hour", 0))
+            minute = int(schedule.get("minute", 0))
+            schedule_time = (
+                f"{hour:02d}:{minute:02d}"
+                if 0 <= hour <= 23 and 0 <= minute <= 59
+                else "??:??"
+            )
+        except (TypeError, ValueError):
+            schedule_time = "??:??"
+
+        schedule_type = "ONE-TIME" if schedule.get("type") == "once" else "DAILY"
+        message = " ".join(str(schedule.get("message", "")).split())
+        if not message:
+            message = "(empty message)"
+        elif len(message) > 80:
+            message = message[:77] + "..."
+
+        raw_group_ids = schedule.get("group_ids", [])
+        if not isinstance(raw_group_ids, (list, tuple, set)):
+            raw_group_ids = []
+        group_ids = sorted({
+            str(group_id)
+            for group_id in raw_group_ids
+            if group_id is not None and str(group_id).strip()
+        })
+
+        record = {
+            "id": schedule_id,
+            "time": schedule_time,
+            "type": schedule_type,
+            "message": message,
+            "group_ids": group_ids,
+        }
+        records.append(record)
+        for group_id in group_ids:
+            groups.setdefault(group_id, []).append(record)
+
+    daily_total = sum(record["type"] == "DAILY" for record in records)
+    once_total = sum(record["type"] == "ONE-TIME" for record in records)
+    assignment_total = sum(len(record["group_ids"]) for record in records)
+
+    lines = [
+        "📅 GLOBAL SCHEDULE OVERVIEW",
+        (
+            f"Unique schedules: {len(records)} | Daily: {daily_total} "
+            f"| One-time: {once_total}"
+        ),
+        (
+            f"Groups: {len(groups)} | Group schedule assignments: "
+            f"{assignment_total}"
+        ),
+        "",
+    ]
+
+    for group_id in sorted(groups):
+        group_records = sorted(
+            groups[group_id],
+            key=lambda record: (record["time"], record["id"]),
+        )
+        group_daily = sum(record["type"] == "DAILY" for record in group_records)
+        group_once = sum(
+            record["type"] == "ONE-TIME" for record in group_records
+        )
+        lines.append(
+            f"GROUP {group_id} — {len(group_records)} total "
+            f"(Daily {group_daily} | One-time {group_once})"
+        )
+        if not group_records:
+            lines.append("  No schedules.")
+        else:
+            for record in group_records:
+                lines.append(
+                    f"  {record['time']} | {record['type']} | "
+                    f"ID {record['id']} — {record['message']}"
+                )
+        lines.append("")
+
+    unassigned = [record for record in records if not record["group_ids"]]
+    if unassigned:
+        lines.append(f"UNASSIGNED SCHEDULES — {len(unassigned)}")
+        for record in sorted(
+            unassigned, key=lambda item: (item["time"], item["id"])
+        ):
+            lines.append(
+                f"  {record['time']} | {record['type']} | "
+                f"ID {record['id']} — {record['message']}"
+            )
+    elif not records:
+        lines.append("No schedule entries found.")
+
+    return lines
+
+
+def _chunk_schedule_overview(lines: list[str], max_chars: int = 3500) -> list[str]:
+    """Split the report into Telegram-safe plain-text messages."""
+    chunks = []
+    current_lines = []
+    current_length = 0
+
+    for line in lines:
+        line_length = len(line) + (1 if current_lines else 0)
+        if current_lines and current_length + line_length > max_chars:
+            chunks.append("\\n".join(current_lines))
+            current_lines = [line]
+            current_length = len(line)
+        else:
+            current_lines.append(line)
+            current_length += line_length
+
+    if current_lines:
+        chunks.append("\\n".join(current_lines))
+    return chunks or ["📅 GLOBAL SCHEDULE OVERVIEW\\nNo schedule entries found."]
+
+
+async def allschedules_command(update: Update, context: CallbackContext) -> None:
+    """Show all persisted/in-memory schedules to configured admins in private chat."""
+    user = update.effective_user
+    chat = update.effective_chat
+    message = update.effective_message
+
+    if not user or user.id not in ADMIN_IDS:
+        return
+    if not chat or chat.type != "private" or not message:
+        return
+
+    bot_data = context.application.bot_data
+    lines = _build_schedule_overview_lines(
+        bot_data.get("schedules", {}),
+        bot_data.get("groups", ()),
+    )
+    for chunk in _chunk_schedule_overview(lines):
+        await message.reply_text(chunk)
+
+
 def save_schedule_to_mongo(sched_id: str, sched: dict) -> bool | None:
     """Persist one schedule; return None when MongoDB is not configured."""
     db = get_mongo_db()
@@ -5567,6 +5727,7 @@ def main():
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("listusers", list_users))
     application.add_handler(CommandHandler("listgroups", list_groups))
+    application.add_handler(CommandHandler("allschedules", allschedules_command, filters=filters.ChatType.PRIVATE))
     application.add_handler(CommandHandler("listschedules", listschedules_command))
     application.add_handler(CommandHandler("removeschedule", removeschedule_command))
     application.add_handler(CommandHandler("admin", admin_command))
