@@ -950,6 +950,20 @@ def _copy_rich_json(value, depth: int = 0):
     raise ValueError("Article contains a non-JSON value")
 
 
+def _rich_text_character_count(value, parent_key: str | None = None) -> int:
+    """Count user-visible Article text, leaving URLs and file IDs out."""
+    if isinstance(value, str):
+        return len(value) if parent_key in _RICH_MESSAGE_TEXT_FIELDS else 0
+    if isinstance(value, list):
+        return sum(_rich_text_character_count(item, parent_key) for item in value)
+    if isinstance(value, dict):
+        return sum(
+            _rich_text_character_count(item, str(key))
+            for key, item in value.items()
+        )
+    return 0
+
+
 def _rich_media_file_id(media_value, media_kind: str) -> str:
     """Select a reusable file_id from media echoed back by Telegram."""
     candidates = media_value if isinstance(media_value, list) else [media_value]
@@ -1049,6 +1063,8 @@ def _normalize_rich_block(block: dict, counter: list[int], depth: int = 0) -> di
         raw_rows = block.get("cells", [])
         if not isinstance(raw_rows, list):
             raise ValueError("Article table is malformed")
+        if any(not isinstance(row, list) or len(row) > 20 for row in raw_rows):
+            raise ValueError("Article tables may have at most 20 columns")
         normalized_rows = []
         for raw_row in raw_rows:
             if not isinstance(raw_row, list):
@@ -1071,8 +1087,8 @@ def _normalize_rich_block(block: dict, counter: list[int], depth: int = 0) -> di
 
     if block_type == "buttons":
         raw_buttons = block.get("buttons", [])
-        if not isinstance(raw_buttons, list):
-            raise ValueError("Article button row is malformed")
+        if not isinstance(raw_buttons, list) or not 1 <= len(raw_buttons) <= 8:
+            raise ValueError("Article button rows must contain 1-8 buttons")
         button_fields = {
             "text", "style", "url", "callback_data", "web_app", "login_url",
             "switch_inline_query", "switch_inline_query_current_chat",
@@ -1127,6 +1143,8 @@ def _normalize_rich_message_for_input(raw_rich_message: dict) -> dict:
     raw_blocks = raw_rich_message.get("blocks")
     if not isinstance(raw_blocks, list) or not raw_blocks:
         raise ValueError("Article has no supported content blocks")
+    if _rich_text_character_count(raw_rich_message) > 32768:
+        raise ValueError("Article text exceeds Telegram's 32,768-character limit")
     counter = [0]
     output = {
         "blocks": [
