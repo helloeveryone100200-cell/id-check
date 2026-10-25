@@ -1240,6 +1240,11 @@ async def _reply_custom(target_message, bot_data: dict, key: str,
     (e.g. {today}, {name}) change the text length.
     """
     stored = _get_custom_msgs(bot_data).get(key, {})
+    rich_message = _prepare_stored_rich_message(stored, fmt, suffix)
+    if rich_message is not None:
+        await _send_rich_message_reply(target_message, rich_message, reply_markup)
+        return
+
     raw_text = stored.get("text") or DEFAULT_MSGS.get(key, "")
     raw_entities = stored.get("entities")
 
@@ -1261,6 +1266,11 @@ async def _send_custom(bot, chat_id: int, bot_data: dict, key: str,
                        parse_mode=None, **fmt):
     """Send a customisable bot notification, preserving emoji entities."""
     stored = _get_custom_msgs(bot_data).get(key, {})
+    rich_message = _prepare_stored_rich_message(stored, fmt)
+    if rich_message is not None:
+        await _send_rich_message_to_chat(bot, chat_id, rich_message)
+        return
+
     raw_text = stored.get("text") or DEFAULT_MSGS.get(key, "")
     raw_entities = stored.get("entities")
 
@@ -1287,6 +1297,11 @@ async def _edit_custom(query, bot_data: dict, key: str,
     get_msg() alone would keep only the visible text and strip those entities.
     """
     stored = _get_custom_msgs(bot_data).get(key, {})
+    rich_message = _prepare_stored_rich_message(stored, fmt)
+    if rich_message is not None:
+        await _edit_rich_message(query, rich_message, reply_markup)
+        return
+
     raw_text = stored.get("text") or DEFAULT_MSGS.get(key, "")
     raw_entities = stored.get("entities")
 
