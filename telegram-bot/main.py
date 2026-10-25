@@ -19,7 +19,7 @@ try:
 except Exception:
     langdetect_detect = None
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler,
+    AIORateLimiter, Application, CommandHandler, MessageHandler,
     CallbackQueryHandler, ConversationHandler,
     PicklePersistence, filters
 )
@@ -5356,9 +5356,21 @@ async def post_init(application: Application) -> None:
 
 async def error_handler(update: object, context: CallbackContext) -> None:
     import traceback
-    from telegram.error import Conflict, NetworkError, TimedOut
+    from telegram.error import Conflict, NetworkError, RetryAfter, TimedOut
 
     err = context.error
+
+    # AIORateLimiter retries transient Flood Control responses. If all bounded
+    # retries are exhausted, log the final cooldown without sending another
+    # Telegram message that could itself trigger the same rate limit.
+    if isinstance(err, RetryAfter):
+        logging.warning(
+            "Telegram Flood Control remained after automatic retries; "
+            "request was not confirmed as sent (retry_after=%s seconds). "
+            "Suppressing repetitive admin notification.",
+            err.retry_after,
+        )
+        return
 
     if isinstance(err, Conflict):
         logging.warning("Telegram Conflict: another bot instance running.")
@@ -5414,6 +5426,17 @@ def main():
         .token(TOKEN)
         .persistence(persistence)
         .post_init(post_init)
+        # Keep a safety margin below Telegram's published free limits and retry
+        # server-requested cooldowns a bounded number of times.
+        .rate_limiter(
+            AIORateLimiter(
+                overall_max_rate=25,
+                overall_time_period=1.0,
+                group_max_rate=17,
+                group_time_period=60.0,
+                max_retries=3,
+            )
+        )
         .connect_timeout(30.0)
         .read_timeout(30.0)
         .write_timeout(30.0)
