@@ -905,6 +905,17 @@ _RICH_TEXT_ONLY_KEYS = (
         "schedule_set_command_description",
         "schedule_remove_command_description",
         "schedule_list_command_description",
+        "schedule_admin_only",
+        "schedule_once_fire_label",
+        "schedule_daily_fire_label",
+        "schedule_type_once_label",
+        "schedule_type_daily_label",
+        "schedule_list_item",
+        "schedule_list_text_item",
+        "plus_fmt",
+        "total_plus_header",
+        "total_plus_row",
+        "total_plus_grand",
     }
 )
 
@@ -1066,6 +1077,7 @@ def _normalize_rich_block(block: dict, counter: list[int], depth: int = 0) -> di
             "text", "style", "url", "callback_data", "web_app", "login_url",
             "switch_inline_query", "switch_inline_query_current_chat",
             "switch_inline_query_chosen_chat", "copy_text", "disabled",
+            "icon_custom_emoji_id",
         }
         buttons = []
         for raw_button in raw_buttons:
@@ -4452,8 +4464,10 @@ async def schedule_pm_open_callback(
         except Exception:
             pass
         try:
-            await query.message.reply_text(
-                get_msg(bot_data, "schedule_open_pm_prompt"),
+            await _reply_custom(
+                query.message,
+                bot_data,
+                "schedule_open_pm_prompt",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton(
                         "Open Bot PM", url=await _schedule_pm_deep_link(context, parameter),
@@ -5013,8 +5027,10 @@ async def schedule_remove_callback(update: Update, context: CallbackContext) -> 
             except Exception:
                 pass
             try:
-                await query.message.reply_text(
-                    get_msg(bot_data, "schedule_open_pm_prompt"),
+                await _reply_custom(
+                    query.message,
+                    bot_data,
+                    "schedule_open_pm_prompt",
                     reply_markup=InlineKeyboardMarkup([[
                         InlineKeyboardButton(
                             "Open Bot PM",
@@ -5708,9 +5724,7 @@ async def resetplus_callback(update: Update, context: CallbackContext) -> None:
 
     # The counter may have changed while the confirmation was open.
     if not keys_to_del:
-        await query.edit_message_text(
-            get_msg(context.application.bot_data, "reset_plus_empty")
-        )
+        await _edit_custom(query, context.application.bot_data, "reset_plus_empty")
         return
 
     for k in keys_to_del:
