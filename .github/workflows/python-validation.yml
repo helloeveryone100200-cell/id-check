@@ -1035,6 +1035,104 @@ jobs:
           assert retry_ctx.application.bot.sent == []
           print("Flood Control retry/notification regression test passed.")
 
+          # Regression: Telegram edited_message has update.message=None but
+          # update.effective_message populated. Feedback must handle that safely.
+          feedback_message = Message(
+              message_id=7654,
+              date=datetime.now(timezone.utc),
+              chat=Chat(id=-1003951437196, type="supergroup"),
+              from_user=User(
+                  id=8188635830, first_name="Feedback <User>",
+                  username="feedback&user", is_bot=False,
+              ),
+              text="Feedback says <hello> & goodbye",
+          )
+          feedback_update = Update(update_id=991122, edited_message=feedback_message)
+          assert feedback_update.message is None
+          assert feedback_update.effective_message is feedback_message
+
+          feedback_handler = next(
+              handler for handler in registered_app.handlers.get(0, [])
+              if isinstance(handler, bot.ConversationHandler)
+              and any(
+                  isinstance(entry, bot.CommandHandler)
+                  and "feedback" in entry.commands
+                  for entry in handler.entry_points
+              )
+          )
+          feedback_message_handler = feedback_handler.states[bot.FEEDBACK_AWAITING][0]
+          assert feedback_message_handler.check_update(feedback_update)
+
+          class FakeFeedbackBot:
+              def __init__(self):
+                  self.sent = []
+              async def send_message(self, **kwargs):
+                  self.sent.append(kwargs)
+
+          feedback_fake_bot = FakeFeedbackBot()
+          feedback_context = SimpleNamespace(
+              application=SimpleNamespace(bot_data={}, bot=feedback_fake_bot)
+          )
+          feedback_replies = []
+          async def capture_feedback_reply(target, bot_data, key, *args, **kwargs):
+              feedback_replies.append((target, key))
+
+          original_feedback_admins = bot.ADMIN_IDS
+          original_reply_custom = bot._reply_custom
+          try:
+              bot.ADMIN_IDS = [123456789]
+              bot._reply_custom = capture_feedback_reply
+              feedback_result = asyncio.run(
+                  bot.process_feedback(feedback_update, feedback_context)
+              )
+          finally:
+              bot.ADMIN_IDS = original_feedback_admins
+              bot._reply_custom = original_reply_custom
+
+          assert feedback_result == bot.ConversationHandler.END
+          assert len(feedback_fake_bot.sent) == 1
+          assert "Feedback &lt;User&gt;" in feedback_fake_bot.sent[0]["text"]
+          assert "feedback&amp;user" in feedback_fake_bot.sent[0]["text"]
+          assert "Feedback says &lt;hello&gt; &amp; goodbye" in feedback_fake_bot.sent[0]["text"]
+          assert feedback_fake_bot.sent[0]["parse_mode"] == "HTML"
+          assert feedback_replies == [(feedback_message, "feedback_sent")]
+          print("Feedback edited-message/update.effective_message regression test passed.")
+
+          # Missing/non-text input must keep the conversation alive and must not
+          # notify admins or raise AttributeError.
+          class FakeInvalidFeedbackMessage:
+              text = None
+              def __init__(self):
+                  self.sent = []
+              async def reply_text(self, text, **kwargs):
+                  self.sent.append(text)
+
+          invalid_feedback_message = FakeInvalidFeedbackMessage()
+          invalid_update = SimpleNamespace(
+              effective_user=User(id=8188635830, first_name="Test", is_bot=False),
+              effective_message=invalid_feedback_message,
+              update_id=991123,
+          )
+          before_admin_sends = len(feedback_fake_bot.sent)
+          invalid_result = asyncio.run(
+              bot.process_feedback(invalid_update, feedback_context)
+          )
+          assert invalid_result == bot.FEEDBACK_AWAITING
+          assert invalid_feedback_message.sent
+          assert len(feedback_fake_bot.sent) == before_admin_sends
+
+          no_message_update = SimpleNamespace(
+              effective_user=User(id=8188635830, first_name="Test", is_bot=False),
+              effective_message=None,
+              update_id=991124,
+          )
+          no_message_result = asyncio.run(
+              bot.process_feedback(no_message_update, feedback_context)
+          )
+          assert no_message_result == bot.FEEDBACK_AWAITING
+          assert len(feedback_fake_bot.sent) == before_admin_sends
+          print("Feedback missing/non-text update guard regression tests passed.")
+
           # Regression: a clean Render shutdown must not restart the same poller
           # inside a closed event loop.
           tree = ast.parse(Path("telegram-bot/main.py").read_text(encoding="utf-8"))
