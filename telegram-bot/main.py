@@ -3518,20 +3518,50 @@ async def start_feedback(update: Update, context: CallbackContext) -> int:
 
 async def process_feedback(update: Update, context: CallbackContext) -> int:
     user = update.effective_user
-    feedback_text = update.message.text
+    message = update.effective_message
+    feedback_text = getattr(message, "text", None)
+
+    # MessageHandler can receive updates whose payload is not in update.message
+    # (for example, an edited message). Never dereference a missing message/text.
+    if message is None or not isinstance(feedback_text, str) or not feedback_text.strip():
+        logging.warning(
+            "Ignored feedback update without a text message (user_id=%s, update_id=%s)",
+            getattr(user, "id", None),
+            getattr(update, "update_id", None),
+        )
+        if message is not None:
+            await message.reply_text(
+                "⚠️ Please send your feedback as a text message, or use /cancel to stop."
+            )
+        return FEEDBACK_AWAITING
+
+    if user is None:
+        logging.warning(
+            "Ignored feedback update without an effective user (update_id=%s)",
+            getattr(update, "update_id", None),
+        )
+        await message.reply_text(
+            "⚠️ I couldn't identify your account. Please send your feedback again."
+        )
+        return FEEDBACK_AWAITING
 
     for admin_id in ADMIN_IDS:
         try:
             await context.application.bot.send_message(
                 chat_id=admin_id,
-                text=f"📩 <b>[NEW FEEDBACK]</b>\nFrom: {user.full_name} (@{user.username} - ID: {user.id})\n\n{feedback_text}",
-                parse_mode='HTML'
+                text=(
+                    "📩 <b>[NEW FEEDBACK]</b>\n"
+                    f"From: {html_escape(user.full_name)} "
+                    f"(@{html_escape(user.username or 'no username')} - ID: {user.id})"
+                    f"\n\n{html_escape(feedback_text)}"
+                ),
+                parse_mode="HTML",
             )
         except Exception:
             pass
 
     await _reply_custom(
-        update.message,
+        message,
         context.application.bot_data,
         "feedback_sent",
     )
