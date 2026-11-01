@@ -22,7 +22,17 @@ class _Collection:
     def update_one(self, query, update, upsert=False):
         key = query["_id"]
         if key not in self.rows and upsert:
-            self.rows[key] = {"_id": key, **update["$setOnInsert"]}
+            self.rows[key] = {"_id": key}
+        if key not in self.rows:
+            return
+        self.rows[key].update(update.get("$setOnInsert", {}))
+        self.rows[key].update(update.get("$set", {}))
+
+    def find_one(self, query):
+        row = self.rows.get(query["_id"])
+        if row and all(row.get(k) == v for k, v in query.items() if k != "_id"):
+            return dict(row)
+        return None
 
     def aggregate(self, pipeline, maxTimeMS=None):
         match = pipeline[0]["$match"]["chat_id"]
@@ -53,11 +63,10 @@ class _Collection:
 
 class _DB:
     def __init__(self):
-        self.collection = _Collection()
+        self.collections = {}
 
     def __getitem__(self, name):
-        assert name == mt.COLLECTION
-        return self.collection
+        return self.collections.setdefault(name, _Collection())
 
 
 class MonthlyTotalTests(unittest.TestCase):
@@ -111,6 +120,37 @@ class MonthlyTotalTests(unittest.TestCase):
             mt.get_totals(self.db, "-1001"),
             [{"khaifa": "文泰", "count": 1}],
         )
+
+    def test_startup_backfill_runs_once_and_survives_month_clear(self):
+        data_msg_map = {
+            (-1001, 500): {
+                "chat_id": "-1001",
+                "entry": "1/11    文泰    client-one",
+            },
+            (-1001, 502): {
+                "chat_id": "-1001",
+                "entry": "31/10    清风️    client-two",
+            },
+            (-1001, 504): {
+                "chat_id": "-1001",
+                "entry": "1/11    -    excluded",
+            },
+        }
+        self.assertEqual(mt.backfill_active_records(self.db, data_msg_map), 2)
+        self.assertTrue(data_msg_map[(-1001, 500)]["monthly_record_id"])
+        self.assertEqual(
+            mt.get_totals(self.db, "-1001"),
+            [
+                {"khaifa": "文泰", "count": 1},
+                {"khaifa": "清风️", "count": 1},
+            ],
+        )
+        self.assertEqual(mt.backfill_active_records(self.db, data_msg_map), 0)
+
+        # A manually cleared month must not be re-imported on a later restart.
+        self.assertEqual(mt.clear_records(self.db, "-1001"), 2)
+        self.assertEqual(mt.backfill_active_records(self.db, data_msg_map), 0)
+        self.assertEqual(mt.get_totals(self.db, "-1001"), [])
 
     def test_clear_only_removes_the_selected_group(self):
         mt.save_record(self.db, "-1001", 10, "文泰")
