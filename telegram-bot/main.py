@@ -35,6 +35,7 @@ from telegram.error import BadRequest
 from web_server import keep_alive
 from monthly_total import (
     BUTTON_TEXT as MONTHLY_TOTAL_BUTTON_TEXT,
+    backfill_active_records,
     save_record as save_monthly_total_record,
     remove_record as remove_monthly_total_record,
     total_command as monthly_total_command_impl,
@@ -6035,6 +6036,12 @@ async def post_init(application: Application) -> None:
     # Restore MongoDB-backed settings and schedules before rebuilding jobs.
     load_bot_config_from_mongo(application.bot_data)
     load_persistent_schedules(application.bot_data)
+    # Import still-active records from the daily reply map exactly once per group.
+    # The marker prevents a later restart from repopulating a manually cleared month.
+    monthly_backfilled = backfill_active_records(get_mongo_db(), data_msg_map)
+    if monthly_backfilled:
+        save_data_msg_map()
+        logging.info("Monthly Total initial backfill: %s active entries", monthly_backfilled)
     restore_schedules(application)
     tz = get_yangon_tz()
     application.job_queue.run_daily(
