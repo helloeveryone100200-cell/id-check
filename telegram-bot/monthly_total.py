@@ -31,8 +31,8 @@ def normalize_khaifa(value):
     if value is None:
         return None, None
     label = unicodedata.normalize("NFC", str(value))
-    label = re.sub(r"\\s+", " ", label).strip()
-    key = re.sub(r"[\\uFE0E\\uFE0F]", "", label).casefold()
+    label = re.sub(r"\s+", " ", label).strip()
+    key = re.sub(r"[\uFE0E\uFE0F]", "", label).casefold()
     if key in {"", "-", "—", "–", "−", "－", "n/a", "na", "none", "null"}:
         return None, None
     return label, key
@@ -333,7 +333,7 @@ async def total_command(update, context, *, get_db):
         "Monthly Clear Data", callback_data="monthly_clear_start", style="danger"
     )
     await message.reply_text(
-        "\\n".join(lines),
+        "\n".join(lines),
         reply_markup=__import__("telegram").InlineKeyboardMarkup([[button]]),
     )
 
@@ -372,7 +372,7 @@ async def clear_callback(update, context, *, get_db, is_group_admin):
         ]])
         await query.answer()
         await query.edit_message_text(
-            "⚠️ ဤ Group ၏ Monthly Total Data အားလုံးကို Database မှ ရှင်းလင်းမည်။\\n\\nဆက်လုပ်မည်လား?",
+            "⚠️ ဤ Group ၏ Monthly Total Data အားလုံးကို Database မှ ရှင်းလင်းမည်။\n\nဆက်လုပ်မည်လား?",
             reply_markup=keyboard,
         )
         return
@@ -407,4 +407,4 @@ async def clear_callback(update, context, *, get_db, is_group_admin):
     if context.application.persistence:
         await context.application.persistence.flush()
     await query.answer()
-    await query.edit_message_text(f"✅ Monthly Total Data ရှင်းလင်းပြီးပါပြီ။\\n🗑️ Record {count} ခု ဖျက်ပြီးပါပြီ။")
+    await query.edit_message_text(f"✅ Monthly Total Data ရှင်းလင်းပြီးပါပြီ။\n🗑️ Record {count} ခု ဖျက်ပြီးပါပြီ။")
