@@ -5820,6 +5820,142 @@ async def monthly_total_clear_callback(update: Update, context: CallbackContext)
     )
 
 
+MONTHLY_ALL_CLEAR_TTL_SECONDS = 600
+
+
+async def monthly_all_clear_start(update: Update, context: CallbackContext) -> None:
+    """Open a two-step ADMIN-only confirmation to clear every group's monthly totals."""
+    user = update.effective_user
+    chat = update.effective_chat
+    message = _update_message(update)
+    if message is None:
+        return
+    if chat is None or chat.type != "private" or user is None or user.id not in ADMIN_IDS:
+        await message.reply_text(
+            "🔒 Monthly All Clear Data ကို Bot PM ထဲမှ ADMIN_IDS များသာ အသုံးပြုနိုင်ပါသည်။"
+        )
+        return
+
+    summary = monthly_total_all_summary(get_mongo_db())
+    if summary is None:
+        await message.reply_text(
+            "❌ Monthly Total Database ကို ဖတ်၍မရပါ။ Data များကို မပြောင်းလဲထားပါ။"
+        )
+        return
+    if not summary["groups"] and not summary["submissions"]:
+        await message.reply_text("ℹ️ ရှင်းလင်းရန် Group Monthly Total Data မရှိသေးပါ။")
+        return
+
+    token = secrets.token_urlsafe(8)
+    context.user_data["monthly_all_clear_pending"] = {
+        "token": token,
+        "user_id": int(user.id),
+        "created_at": datetime.now().timestamp(),
+    }
+    keyboard = InlineKeyboardMarkup([[
+        _confirmation_button(
+            context.application.bot_data,
+            "confirm_button",
+            f"monthly_all_clear_confirm_{token}",
+            "success",
+        ),
+        _confirmation_button(
+            context.application.bot_data,
+            "cancel_button",
+            f"monthly_all_clear_cancel_{token}",
+            "danger",
+        ),
+    ]])
+    await message.reply_text(
+        "⚠️ <b>Monthly All Clear Data အတည်ပြုခြင်း</b>\n\n"
+        f"Group အားလုံး၏ Monthly Total Data များကို Database မှ ရှင်းလင်းပါမည်။\n"
+        f"👥 သိမ်းဆည်းထားသော Group: <b>{summary['groups']}</b> ခု\n"
+        f"📊 Monthly records: <b>{summary['submissions']}</b> ခု\n\n"
+        "ဤလုပ်ဆောင်ချက်သည် Group အားလုံး၏ Monthly Total ကိုသာ ဖျက်မည်ဖြစ်ပြီး "
+        "Daily Data နှင့် အခြား Bot Data များကို မထိခိုက်ပါ။\n\n"
+        "ဆက်လက်လုပ်ဆောင်မည်လား?",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+
+
+async def monthly_all_clear_callback(update: Update, context: CallbackContext) -> None:
+    """Confirm/cancel global Monthly Total clear, bound to the initiating admin."""
+    query = update.callback_query
+    if query is None:
+        return
+    message = query.message
+    user = query.from_user
+    if (
+        message is None
+        or getattr(getattr(message, "chat", None), "type", None) != "private"
+        or user is None
+        or user.id not in ADMIN_IDS
+    ):
+        await query.answer(
+            "🔒 ADMIN_IDS များ၏ Bot PM ထဲတွင်သာ အသုံးပြုနိုင်ပါသည်။",
+            show_alert=True,
+        )
+        return
+
+    match = re.fullmatch(
+        r"monthly_all_clear_(confirm|cancel)_([A-Za-z0-9_-]{8,20})",
+        query.data or "",
+    )
+    if not match:
+        await query.answer()
+        return
+
+    action, token = match.groups()
+    pending = context.user_data.get("monthly_all_clear_pending") or {}
+    created = pending.get("created_at")
+    expired = (
+        not isinstance(created, (int, float))
+        or datetime.now().timestamp() - created > MONTHLY_ALL_CLEAR_TTL_SECONDS
+    )
+    if (
+        expired
+        or pending.get("token") != token
+        or int(pending.get("user_id", 0)) != int(user.id)
+    ):
+        context.user_data.pop("monthly_all_clear_pending", None)
+        await query.answer(
+            "⌛ Confirm လုပ်ရန် သတ်မှတ်ထားသောအချိန် ကုန်ဆုံးသွားပါပြီ။",
+            show_alert=True,
+        )
+        return
+
+    if action == "cancel":
+        context.user_data.pop("monthly_all_clear_pending", None)
+        await query.answer()
+        await query.edit_message_text(
+            "↩️ Monthly All Clear Data ကို Cancel လုပ်လိုက်ပါပြီ။\n"
+            "Database ထဲရှိ Monthly Data များ မပြောင်းလဲပါ။"
+        )
+        return
+
+    result = clear_all_monthly_total_records(get_mongo_db())
+    context.user_data.pop("monthly_all_clear_pending", None)
+    if result is None:
+        await query.answer()
+        await query.edit_message_text(
+            "❌ Database error ဖြစ်ပွားသဖြင့် Monthly Total Data များကို "
+            "အပြည့်အဝ ရှင်းလင်းနိုင်ခြင်း မရှိပါ။ Database ကို စစ်ဆေးပါ။"
+        )
+        return
+
+    if context.application.persistence:
+        await context.application.persistence.flush()
+    await query.answer()
+    await query.edit_message_text(
+        "✅ <b>Monthly All Clear Data ပြီးပါပြီ။</b>\n\n"
+        f"👥 ရှင်းလင်းထားသော Group: <b>{result['groups']}</b> ခု\n"
+        f"📊 ရှင်းလင်းထားသော Monthly records: <b>{result['submissions']}</b> ခု\n\n"
+        "Group အားလုံး၏ Monthly Total Data များကို Database မှ ရှင်းလင်းပြီးပါပြီ။",
+        parse_mode="HTML",
+    )
+
+
 async def reset_plus_command(update: Update, context: CallbackContext) -> None:
     """/reset_plus — ဤ chat ထဲးမှာ plus_counters ကိုသာ ရှင်လင်းသည်။"""
     message = _update_message(update)
