@@ -312,6 +312,54 @@ def clear_records(db, chat_id):
         return None
 
 
+def get_all_summary(db):
+    """Return a safe preview of all groups' monthly records before global clear."""
+    if db is None:
+        return None
+    try:
+        counter_rows = list(
+            db[COLLECTION].find({}, {"chat_id": 1, "count": 1})
+        )
+        legacy_rows = list(
+            db[LEGACY_COLLECTION].find({}, {"chat_id": 1})
+        )
+        group_ids = {
+            str(row.get("chat_id"))
+            for row in counter_rows + legacy_rows
+            if row.get("chat_id") is not None
+        }
+        submission_count = sum(
+            max(0, int(row.get("count", 0) or 0))
+            for row in counter_rows
+        ) + len(legacy_rows)
+        return {
+            "groups": len(group_ids),
+            "submissions": submission_count,
+            "counter_documents": len(counter_rows),
+            "legacy_documents": len(legacy_rows),
+        }
+    except Exception:
+        return None
+
+
+def clear_all_records(db):
+    """Clear Monthly Total counters for every group, preserving migration markers.
+
+    The one-time migration markers must remain so old daily reply mappings can
+    never repopulate a manually cleared month after the next bot restart.
+    """
+    summary = get_all_summary(db)
+    if summary is None:
+        return None
+    try:
+        db[COLLECTION].delete_many({})
+        # Remove any unmigrated legacy records too; never touch monthly_total_meta.
+        db[LEGACY_COLLECTION].delete_many({})
+        return summary
+    except Exception:
+        return None
+
+
 async def total_command(update, context, *, get_db):
     message, chat = update.effective_message, update.effective_chat
     if message is None or chat is None:

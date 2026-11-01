@@ -39,6 +39,8 @@ from monthly_total import (
     save_record as save_monthly_total_record,
     remove_record as remove_monthly_total_record,
     clear_active_records as clear_monthly_active_records,
+    get_all_summary as monthly_total_all_summary,
+    clear_all_records as clear_all_monthly_total_records,
     total_command as monthly_total_command_impl,
     clear_callback as monthly_total_clear_callback_impl,
 )
@@ -106,6 +108,7 @@ CUSTOM_MSG_LABELS = {
     # Customizable reply-keyboard buttons
     "showdata_button": "📊 Showdata — Reply Keyboard button",
     "monthly_total_button": "📊 Monthly Total — Group reply-keyboard button",
+    "monthly_all_clear_button": "🧹 Monthly All Clear Data — Admin PM Reply Keyboard button",
     "total_plus_button": "🔢 Total Plus — Reply Keyboard button",
     "clear_data_button": "🗑️ Clear Data — Reply Keyboard button",
     "reset_plus_button": "🔄 Reset Plus — Reply Keyboard button",
@@ -222,6 +225,7 @@ DEFAULT_MSGS: dict = {
     # Reply-keyboard labels (rendered as plain text if no custom emoji is configured)
     "showdata_button": "Showdata",
     "monthly_total_button": MONTHLY_TOTAL_BUTTON_TEXT,
+    "monthly_all_clear_button": "Monthly All Clear Data",
     "total_plus_button": "Total Plus",
     "clear_data_button": "Clear Data",
     "reset_plus_button": "Reset Plus",
@@ -446,6 +450,7 @@ _SCHEDULE_ACTION_BUTTON_KEYS = {
 _REPLY_KEYBOARD_BUTTON_KEYS = {
     "showdata_button",
     "monthly_total_button",
+    "monthly_all_clear_button",
     "total_plus_button",
     "clear_data_button",
     "reset_plus_button",
@@ -2821,8 +2826,12 @@ async def report_form_command(update: Update, context: CallbackContext) -> None:
     )
 
 
-def _main_reply_keyboard(bot_data: dict, include_schedule: bool = False) -> ReplyKeyboardMarkup:
-    """Build the persistent keyboard; schedule controls are group-only."""
+def _main_reply_keyboard(
+    bot_data: dict,
+    include_schedule: bool = False,
+    include_monthly_admin: bool = False,
+) -> ReplyKeyboardMarkup:
+    """Build the persistent keyboard with group and ADMIN-only PM controls."""
     rows = [
         [
             _schedule_keyboard_button(bot_data, "showdata_button", style="primary"),
@@ -2837,6 +2846,14 @@ def _main_reply_keyboard(bot_data: dict, include_schedule: bool = False) -> Repl
             _schedule_keyboard_button(bot_data, "reset_plus_all_button", style="success"),
         ],
     ]
+    if include_monthly_admin:
+        rows.append([
+            _schedule_keyboard_button(
+                bot_data,
+                "monthly_all_clear_button",
+                style="danger",
+            ),
+        ])
     if include_schedule:
         rows.append([
             _schedule_keyboard_button(
@@ -2875,16 +2892,26 @@ async def ensure_reply_keyboard(update: Update, context: CallbackContext) -> Non
     text = (message.text or "").strip()
     if re.match(r"^/(?:start|menu)(?:@\w+)?(?:\s|$)", text, re.IGNORECASE):
         return
-    if context.chat_data.get("reply_keyboard_version") == "group-schedule-monthly-v3":
+    if context.chat_data.get("reply_keyboard_version") == "group-schedule-monthly-admin-v4":
         return
 
     context.chat_data["reply_keyboard_sent"] = True
-    context.chat_data["reply_keyboard_version"] = "group-schedule-monthly-v3"
+    context.chat_data["reply_keyboard_version"] = "group-schedule-monthly-admin-v4"
     bot_data = context.application.bot_data
     include_schedule = update.effective_chat.type in {"group", "supergroup"}
+    user = update.effective_user
+    include_monthly_admin = (
+        update.effective_chat.type == "private"
+        and user is not None
+        and user.id in ADMIN_IDS
+    )
     await message.reply_text(
         "Menu",
-        reply_markup=_main_reply_keyboard(bot_data, include_schedule=include_schedule),
+        reply_markup=_main_reply_keyboard(
+            bot_data,
+            include_schedule=include_schedule,
+            include_monthly_admin=include_monthly_admin,
+        ),
     )
 
 
@@ -2893,10 +2920,20 @@ async def main_menu_command(
 ) -> None:
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
     context.chat_data["reply_keyboard_sent"] = True
-    context.chat_data["reply_keyboard_version"] = "group-schedule-monthly-v3"
+    context.chat_data["reply_keyboard_version"] = "group-schedule-monthly-admin-v4"
     bot_data = context.application.bot_data
     include_schedule = update.effective_chat.type in {"group", "supergroup"}
-    reply_markup = _main_reply_keyboard(bot_data, include_schedule=include_schedule)
+    user = update.effective_user
+    include_monthly_admin = (
+        update.effective_chat.type == "private"
+        and user is not None
+        and user.id in ADMIN_IDS
+    )
+    reply_markup = _main_reply_keyboard(
+        bot_data,
+        include_schedule=include_schedule,
+        include_monthly_admin=include_monthly_admin,
+    )
     if show_welcome:
         user_name = update.effective_user.full_name if update.effective_user else "User"
         bot_username = context.bot.username
@@ -2961,6 +2998,7 @@ async def main_menu_text_handler(update: Update, context: CallbackContext) -> No
     handlers = {
         "showdata_button": show_data,
         "monthly_total_button": monthly_total_command,
+        "monthly_all_clear_button": monthly_all_clear_start,
         "total_plus_button": total_plus_command,
         "clear_data_button": clear_data,
         "reset_plus_button": reset_plus_command,
@@ -5782,6 +5820,142 @@ async def monthly_total_clear_callback(update: Update, context: CallbackContext)
     )
 
 
+MONTHLY_ALL_CLEAR_TTL_SECONDS = 600
+
+
+async def monthly_all_clear_start(update: Update, context: CallbackContext) -> None:
+    """Open a two-step ADMIN-only confirmation to clear every group's monthly totals."""
+    user = update.effective_user
+    chat = update.effective_chat
+    message = _update_message(update)
+    if message is None:
+        return
+    if chat is None or chat.type != "private" or user is None or user.id not in ADMIN_IDS:
+        await message.reply_text(
+            "🔒 Monthly All Clear Data ကို Bot PM ထဲမှ ADMIN_IDS များသာ အသုံးပြုနိုင်ပါသည်။"
+        )
+        return
+
+    summary = monthly_total_all_summary(get_mongo_db())
+    if summary is None:
+        await message.reply_text(
+            "❌ Monthly Total Database ကို ဖတ်၍မရပါ။ Data များကို မပြောင်းလဲထားပါ။"
+        )
+        return
+    if not summary["groups"] and not summary["submissions"]:
+        await message.reply_text("ℹ️ ရှင်းလင်းရန် Group Monthly Total Data မရှိသေးပါ။")
+        return
+
+    token = secrets.token_urlsafe(8)
+    context.user_data["monthly_all_clear_pending"] = {
+        "token": token,
+        "user_id": int(user.id),
+        "created_at": datetime.now().timestamp(),
+    }
+    keyboard = InlineKeyboardMarkup([[
+        _confirmation_button(
+            context.application.bot_data,
+            "confirm_button",
+            f"monthly_all_clear_confirm_{token}",
+            "success",
+        ),
+        _confirmation_button(
+            context.application.bot_data,
+            "cancel_button",
+            f"monthly_all_clear_cancel_{token}",
+            "danger",
+        ),
+    ]])
+    await message.reply_text(
+        "⚠️ <b>Monthly All Clear Data အတည်ပြုခြင်း</b>\n\n"
+        f"Group အားလုံး၏ Monthly Total Data များကို Database မှ ရှင်းလင်းပါမည်။\n"
+        f"👥 သိမ်းဆည်းထားသော Group: <b>{summary['groups']}</b> ခု\n"
+        f"📊 Monthly records: <b>{summary['submissions']}</b> ခု\n\n"
+        "ဤလုပ်ဆောင်ချက်သည် Group အားလုံး၏ Monthly Total ကိုသာ ဖျက်မည်ဖြစ်ပြီး "
+        "Daily Data နှင့် အခြား Bot Data များကို မထိခိုက်ပါ။\n\n"
+        "ဆက်လက်လုပ်ဆောင်မည်လား?",
+        parse_mode="HTML",
+        reply_markup=keyboard,
+    )
+
+
+async def monthly_all_clear_callback(update: Update, context: CallbackContext) -> None:
+    """Confirm/cancel global Monthly Total clear, bound to the initiating admin."""
+    query = update.callback_query
+    if query is None:
+        return
+    message = query.message
+    user = query.from_user
+    if (
+        message is None
+        or getattr(getattr(message, "chat", None), "type", None) != "private"
+        or user is None
+        or user.id not in ADMIN_IDS
+    ):
+        await query.answer(
+            "🔒 ADMIN_IDS များ၏ Bot PM ထဲတွင်သာ အသုံးပြုနိုင်ပါသည်။",
+            show_alert=True,
+        )
+        return
+
+    match = re.fullmatch(
+        r"monthly_all_clear_(confirm|cancel)_([A-Za-z0-9_-]{8,20})",
+        query.data or "",
+    )
+    if not match:
+        await query.answer()
+        return
+
+    action, token = match.groups()
+    pending = context.user_data.get("monthly_all_clear_pending") or {}
+    created = pending.get("created_at")
+    expired = (
+        not isinstance(created, (int, float))
+        or datetime.now().timestamp() - created > MONTHLY_ALL_CLEAR_TTL_SECONDS
+    )
+    if (
+        expired
+        or pending.get("token") != token
+        or int(pending.get("user_id", 0)) != int(user.id)
+    ):
+        context.user_data.pop("monthly_all_clear_pending", None)
+        await query.answer(
+            "⌛ Confirm လုပ်ရန် သတ်မှတ်ထားသောအချိန် ကုန်ဆုံးသွားပါပြီ။",
+            show_alert=True,
+        )
+        return
+
+    if action == "cancel":
+        context.user_data.pop("monthly_all_clear_pending", None)
+        await query.answer()
+        await query.edit_message_text(
+            "↩️ Monthly All Clear Data ကို Cancel လုပ်လိုက်ပါပြီ။\n"
+            "Database ထဲရှိ Monthly Data များ မပြောင်းလဲပါ။"
+        )
+        return
+
+    result = clear_all_monthly_total_records(get_mongo_db())
+    context.user_data.pop("monthly_all_clear_pending", None)
+    if result is None:
+        await query.answer()
+        await query.edit_message_text(
+            "❌ Database error ဖြစ်ပွားသဖြင့် Monthly Total Data များကို "
+            "အပြည့်အဝ ရှင်းလင်းနိုင်ခြင်း မရှိပါ။ Database ကို စစ်ဆေးပါ။"
+        )
+        return
+
+    if context.application.persistence:
+        await context.application.persistence.flush()
+    await query.answer()
+    await query.edit_message_text(
+        "✅ <b>Monthly All Clear Data ပြီးပါပြီ။</b>\n\n"
+        f"👥 ရှင်းလင်းထားသော Group: <b>{result['groups']}</b> ခု\n"
+        f"📊 ရှင်းလင်းထားသော Monthly records: <b>{result['submissions']}</b> ခု\n\n"
+        "Group အားလုံး၏ Monthly Total Data များကို Database မှ ရှင်းလင်းပြီးပါပြီ။",
+        parse_mode="HTML",
+    )
+
+
 async def reset_plus_command(update: Update, context: CallbackContext) -> None:
     """/reset_plus — ဤ chat ထဲးမှာ plus_counters ကိုသာ ရှင်လင်းသည်။"""
     message = _update_message(update)
@@ -6294,6 +6468,10 @@ def main():
     application.add_handler(CallbackQueryHandler(
         monthly_total_clear_callback,
         pattern=r"^monthly_clear_(?:start|confirm_[A-Za-z0-9_-]{8,20}|cancel_[A-Za-z0-9_-]{8,20})$",
+    ))
+    application.add_handler(CallbackQueryHandler(
+        monthly_all_clear_callback,
+        pattern=r"^monthly_all_clear_(?:confirm|cancel)_[A-Za-z0-9_-]{8,20}$",
     ))
     application.add_handler(CommandHandler("form", report_form_command))
     application.add_handler(CommandHandler("stats", stats))
