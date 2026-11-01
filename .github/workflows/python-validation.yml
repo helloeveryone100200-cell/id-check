@@ -32,6 +32,9 @@ jobs:
         run: |
           python -m py_compile bot.py telegram-bot/main.py telegram-bot/web_server.py
 
+      - name: Test Monthly Total Khaifa counting and deletion
+        run: python -m unittest discover -s telegram-bot -p "test_monthly_total.py"
+
       - name: Smoke-test handler registration and group keyboards
         env:
           BOT_TOKEN: "123456:TEST_TOKEN_FOR_HANDLER_SMOKE_TEST"
