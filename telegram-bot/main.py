@@ -33,6 +33,14 @@ from telegram import (
 from telegram.ext import CallbackContext
 from telegram.error import BadRequest
 from web_server import keep_alive
+from monthly_total import (
+    BUTTON_TEXT as MONTHLY_TOTAL_BUTTON_TEXT,
+    backfill_active_records,
+    save_record as save_monthly_total_record,
+    remove_record as remove_monthly_total_record,
+    total_command as monthly_total_command_impl,
+    clear_callback as monthly_total_clear_callback_impl,
+)
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -96,6 +104,7 @@ CUSTOM_MSG_LABELS = {
     "owner_only_action_denied": "🔒 Owner-only actions — Access denied message",
     # Customizable reply-keyboard buttons
     "showdata_button": "📊 Showdata — Reply Keyboard button",
+    "monthly_total_button": "📊 Monthly Total — Group reply-keyboard button",
     "total_plus_button": "🔢 Total Plus — Reply Keyboard button",
     "clear_data_button": "🗑️ Clear Data — Reply Keyboard button",
     "reset_plus_button": "🔄 Reset Plus — Reply Keyboard button",
@@ -211,6 +220,7 @@ DEFAULT_MSGS: dict = {
     "owner_only_action_denied": "❌ ဤလုပ်ဆောင်ချက်ကို Bot Owner သာ အသုံးပြုနိုင်ပါသည်။",
     # Reply-keyboard labels (rendered as plain text if no custom emoji is configured)
     "showdata_button": "Showdata",
+    "monthly_total_button": MONTHLY_TOTAL_BUTTON_TEXT,
     "total_plus_button": "Total Plus",
     "clear_data_button": "Clear Data",
     "reset_plus_button": "Reset Plus",
@@ -434,6 +444,7 @@ _SCHEDULE_ACTION_BUTTON_KEYS = {
 }
 _REPLY_KEYBOARD_BUTTON_KEYS = {
     "showdata_button",
+    "monthly_total_button",
     "total_plus_button",
     "clear_data_button",
     "reset_plus_button",
@@ -2829,6 +2840,13 @@ def _main_reply_keyboard(bot_data: dict, include_schedule: bool = False) -> Repl
         rows.append([
             _schedule_keyboard_button(
                 bot_data,
+                "monthly_total_button",
+                style="primary",
+            ),
+        ])
+        rows.append([
+            _schedule_keyboard_button(
+                bot_data,
                 "schedule_menu_button",
                 style="primary",
             ),
@@ -2856,11 +2874,11 @@ async def ensure_reply_keyboard(update: Update, context: CallbackContext) -> Non
     text = (message.text or "").strip()
     if re.match(r"^/(?:start|menu)(?:@\w+)?(?:\s|$)", text, re.IGNORECASE):
         return
-    if context.chat_data.get("reply_keyboard_version") == "group-schedule-pm-v2":
+    if context.chat_data.get("reply_keyboard_version") == "group-schedule-monthly-v3":
         return
 
     context.chat_data["reply_keyboard_sent"] = True
-    context.chat_data["reply_keyboard_version"] = "group-schedule-pm-v2"
+    context.chat_data["reply_keyboard_version"] = "group-schedule-monthly-v3"
     bot_data = context.application.bot_data
     include_schedule = update.effective_chat.type in {"group", "supergroup"}
     await message.reply_text(
@@ -2874,7 +2892,7 @@ async def main_menu_command(
 ) -> None:
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
     context.chat_data["reply_keyboard_sent"] = True
-    context.chat_data["reply_keyboard_version"] = "group-schedule-pm-v2"
+    context.chat_data["reply_keyboard_version"] = "group-schedule-monthly-v3"
     bot_data = context.application.bot_data
     include_schedule = update.effective_chat.type in {"group", "supergroup"}
     reply_markup = _main_reply_keyboard(bot_data, include_schedule=include_schedule)
@@ -2941,6 +2959,7 @@ async def main_menu_text_handler(update: Update, context: CallbackContext) -> No
     """Route current and legacy customizable reply-keyboard labels to their original actions."""
     handlers = {
         "showdata_button": show_data,
+        "monthly_total_button": monthly_total_command,
         "total_plus_button": total_plus_command,
         "clear_data_button": clear_data,
         "reset_plus_button": reset_plus_command,
@@ -3481,6 +3500,19 @@ async def extract_and_save_data(update: Update, context: CallbackContext) -> Non
     existing.append(stored_entry)
     mg_save_group_data(chat_id, today_key, existing)
 
+    # Keep a separate month-to-date count. Only Khaifa + source message ID
+    # are stored; private client fields are not copied to this collection.
+    monthly_record_id = None
+    if update.effective_chat and update.effective_chat.type in {"group", "supergroup"}:
+        monthly_record_id = save_monthly_total_record(
+            get_mongo_db(), chat_id, update.message.message_id, extracted_khaifa
+        )
+        if extracted_khaifa and extracted_khaifa.strip() not in {"-", "—", "–"} and monthly_record_id is None:
+            logging.error(
+                "Monthly Total save failed for group %s message %s",
+                chat_id, update.message.message_id,
+            )
+
     # Also keep pickle in sync (fallback)
     if 'group_data' not in context.application.bot_data:
         context.application.bot_data['group_data'] = {}
@@ -3500,6 +3532,7 @@ async def extract_and_save_data(update: Update, context: CallbackContext) -> Non
         "entry": stored_entry,
         "date_key": today_key,
         "chat_id": chat_id,
+        "monthly_record_id": monthly_record_id,
     }
     save_data_msg_map()
 
@@ -5569,6 +5602,15 @@ async def handle_minus_reply(update: Update, context: CallbackContext) -> None:
             if context.application.persistence:
                 await context.application.persistence.flush()
 
+        monthly_record_id = record.get("monthly_record_id")
+        if monthly_record_id and not remove_monthly_total_record(
+            get_mongo_db(), cid_str, monthly_record_id
+        ):
+            logging.error(
+                "Monthly Total reversal failed for chat=%s monthly_record_id=%s",
+                cid_str, monthly_record_id,
+            )
+
         save_data_msg_map()
         await _reply_custom(original, context.application.bot_data,
                             "minus_del_entry", entry=entry)
@@ -5723,6 +5765,18 @@ async def total_plus_command(update: Update, context: CallbackContext) -> None:
     _mention = f"@{_u.username}" if (_u and _u.username) else (_u.full_name if _u else "User")
     await _reply_custom(message, context.application.bot_data,
                         "total_plus_footer", parse_mode='HTML', mention=_mention)
+
+
+async def monthly_total_command(update: Update, context: CallbackContext) -> None:
+    await monthly_total_command_impl(update, context, get_db=get_mongo_db)
+
+
+async def monthly_total_clear_callback(update: Update, context: CallbackContext) -> None:
+    await monthly_total_clear_callback_impl(
+        update, context,
+        get_db=get_mongo_db,
+        is_group_admin=_is_group_schedule_admin,
+    )
 
 
 async def reset_plus_command(update: Update, context: CallbackContext) -> None:
@@ -5982,6 +6036,12 @@ async def post_init(application: Application) -> None:
     # Restore MongoDB-backed settings and schedules before rebuilding jobs.
     load_bot_config_from_mongo(application.bot_data)
     load_persistent_schedules(application.bot_data)
+    # Import still-active records from the daily reply map exactly once per group.
+    # The marker prevents a later restart from repopulating a manually cleared month.
+    monthly_backfilled = backfill_active_records(get_mongo_db(), data_msg_map)
+    if monthly_backfilled:
+        save_data_msg_map()
+        logging.info("Monthly Total initial backfill: %s active entries", monthly_backfilled)
     restore_schedules(application)
     tz = get_yangon_tz()
     application.job_queue.run_daily(
@@ -6224,6 +6284,10 @@ def main():
     application.add_handler(CommandHandler("showdata", show_data))
     application.add_handler(CommandHandler("cleardata", clear_data))
     application.add_handler(CallbackQueryHandler(cleardata_callback, pattern=r'^cleardata_(confirm|cancel)$'))
+    application.add_handler(CallbackQueryHandler(
+        monthly_total_clear_callback,
+        pattern=r"^monthly_clear_(?:start|confirm_[A-Za-z0-9_-]{8,20}|cancel_[A-Za-z0-9_-]{8,20})$",
+    ))
     application.add_handler(CommandHandler("form", report_form_command))
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("listusers", list_users))
