@@ -341,5 +341,37 @@ class MonthlyTotalTests(unittest.TestCase):
         self.assertEqual(mt.get_totals(self.db, "-1001"), [])
 
 
+    def test_global_clear_counts_and_removes_all_group_monthly_data_only(self):
+        mt.save_record(self.db, "-1001", 10, "文泰")
+        mt.save_record(self.db, "-1001", 11, "文泰")
+        mt.save_record(self.db, "-1002", 12, "清风️")
+        legacy = self.db[mt.LEGACY_COLLECTION]
+        legacy.rows["legacy-1"] = {
+            "_id": "legacy-1", "chat_id": "-1003",
+            "khaifa": "老记录", "khaifa_key": "老记录",
+        }
+        meta = self.db[mt.META_COLLECTION]
+        meta.rows["-1001"] = {
+            "_id": "-1001",
+            "initial_backfill_done": True,
+            "storage_version": mt.STORAGE_VERSION,
+        }
+
+        preview = mt.get_all_summary(self.db)
+        self.assertEqual(preview["groups"], 3)
+        self.assertEqual(preview["submissions"], 4)
+        self.assertEqual(preview["counter_documents"], 2)
+        self.assertEqual(preview["legacy_documents"], 1)
+
+        result = mt.clear_all_records(self.db)
+        self.assertEqual(result, preview)
+        self.assertEqual(mt.get_totals(self.db, "-1001"), [])
+        self.assertEqual(mt.get_totals(self.db, "-1002"), [])
+        self.assertEqual(self.db[mt.LEGACY_COLLECTION].rows, {})
+        # Keep migration markers to prevent old daily mappings from recreating
+        # totals on the next restart.
+        self.assertIn("-1001", meta.rows)
+
+
 if __name__ == "__main__":
     unittest.main()
