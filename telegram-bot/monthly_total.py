@@ -21,7 +21,7 @@ def normalize_khaifa(value):
         return None, None
     label = unicodedata.normalize("NFC", str(value))
     label = re.sub(r"\s+", " ", label).strip()
-    key = label.casefold()
+    key = re.sub(r"[\\uFE0E\\uFE0F]", "", label).casefold()
     if key in {"", "-", "—", "–", "−", "－", "n/a", "na", "none", "null"}:
         return None, None
     return label, key
