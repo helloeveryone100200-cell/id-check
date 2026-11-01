@@ -91,8 +91,8 @@ class MonthlyTotalTests(unittest.TestCase):
         self.assertEqual(
             mt.get_totals(self.db, "-1001"),
             [
-                {"khaifa": "清风️", "count": 3},
                 {"khaifa": "文泰", "count": 4},
+                {"khaifa": "清风️", "count": 3},
             ],
         )
 
