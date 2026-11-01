@@ -38,6 +38,7 @@ from monthly_total import (
     backfill_active_records,
     save_record as save_monthly_total_record,
     remove_record as remove_monthly_total_record,
+    clear_active_records as clear_monthly_active_records,
     total_command as monthly_total_command_impl,
     clear_callback as monthly_total_clear_callback_impl,
 )
@@ -3254,6 +3255,7 @@ async def cleardata_callback(update: Update, context: CallbackContext) -> None:
 
     for k in [k for k in data_msg_map if k[0] == chat_id_int]:
         del data_msg_map[k]
+    clear_monthly_active_records(get_mongo_db(), chat_id)
     save_data_msg_map()
 
     await _edit_custom(
@@ -3390,6 +3392,7 @@ async def adminall_callback(update: Update, context: CallbackContext) -> None:
                     del plus_counted_msgs[k]
                 for k in [k for k in data_msg_map if k[0] == chat_id_int]:
                     del data_msg_map[k]
+                clear_monthly_active_records(db, chat_id_str)
                 if cleared_groups == 0:
                     cleared_groups += 1
 
@@ -6005,6 +6008,7 @@ async def auto_clear_job(context: CallbackContext) -> None:
                 del plus_counted_msgs[k]
             for k in [k for k in list(data_msg_map.keys()) if k[0] == chat_id_int]:
                 del data_msg_map[k]
+            clear_monthly_active_records(db, chat_id_str)
 
     save_plus_data()
     save_data_msg_map()
@@ -6036,12 +6040,15 @@ async def post_init(application: Application) -> None:
     # Restore MongoDB-backed settings and schedules before rebuilding jobs.
     load_bot_config_from_mongo(application.bot_data)
     load_persistent_schedules(application.bot_data)
-    # Import still-active records from the daily reply map exactly once per group.
-    # The marker prevents a later restart from repopulating a manually cleared month.
+    # Compact the legacy per-submission collection into per-group/Khaifa counters.
+    # Only still-active daily reply mappings are retained for '-' reversals.
     monthly_backfilled = backfill_active_records(get_mongo_db(), data_msg_map)
     if monthly_backfilled:
         save_data_msg_map()
-        logging.info("Monthly Total initial backfill: %s active entries", monthly_backfilled)
+        logging.info(
+            "Monthly Total compact storage migration: %s legacy records consolidated",
+            monthly_backfilled,
+        )
     restore_schedules(application)
     tz = get_yangon_tz()
     application.job_queue.run_daily(

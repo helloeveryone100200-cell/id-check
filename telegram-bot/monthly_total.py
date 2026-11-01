@@ -1,13 +1,24 @@
-"""Monthly Khaifa totals, independent from the daily report collection."""
+"""Compact monthly Khaifa counters with current-day reversal tracking.
+
+One document is stored per (group, normalized Khaifa), not per submission.
+The active_ids array contains only records that are still reversible during
+the current daily reporting window. Daily clearing empties that array while
+leaving the month-to-date count intact.
+"""
 import re
 import secrets
+import threading
 import unicodedata
 from datetime import datetime
 
-COLLECTION = "monthly_total_entries"
+COLLECTION = "monthly_total_counts"
+LEGACY_COLLECTION = "monthly_total_entries"
+META_COLLECTION = "monthly_total_meta"
+STORAGE_VERSION = 2
 BUTTON_TEXT = "Monthly Total"
 CLEAR_TTL_SECONDS = 600
 _index_ready = False
+_write_lock = threading.RLock()
 
 WARNING = (
     "ဤ Monthly Total Data ကို လကုန်ရန် နောက်ဆုံးရက်တွင် အလုပ်မဆင်းခင်အချိန်တွင် "
@@ -27,91 +38,203 @@ def normalize_khaifa(value):
     return label, key
 
 
+def _counter_id(chat_id, key):
+    return f"{str(chat_id)}:{key}"
+
+
 def _ensure_index(db):
     global _index_ready
     if _index_ready or db is None:
         return
     try:
-        db[COLLECTION].create_index([("chat_id", 1), ("khaifa_key", 1)])
+        collection = db[COLLECTION]
+        collection.create_index([("chat_id", 1), ("khaifa_key", 1)])
+        collection.create_index([("chat_id", 1), ("active_ids", 1)])
         _index_ready = True
     except Exception:
+        # Index creation is retried on the next operation. Queries remain safe.
         pass
 
 
+def _entry_khaifa(record):
+    fields = str(record.get("entry") or "").split("    ", 2)
+    if len(fields) < 2:
+        return None, None
+    return normalize_khaifa(fields[1])
+
+
 def save_record(db, chat_id, message_id, value):
+    """Increment one compact counter and register this ID for current-day '-'.
+
+    The same message ID is stored only in the counter's active_ids array.
+    MongoDB's atomic $addToSet + $inc update prevents duplicate increments.
+    """
     label, key = normalize_khaifa(value)
     if not label or not key or db is None:
         return None
+
+    chat_id = str(chat_id)
     record_id = f"{chat_id}:{int(message_id)}"
     try:
         _ensure_index(db)
-        db[COLLECTION].update_one(
-            {"_id": record_id},
-            {"$setOnInsert": {
-                "chat_id": str(chat_id), "message_id": int(message_id),
-                "khaifa": label, "khaifa_key": key,
-            }},
-            upsert=True,
-        )
+        collection = db[COLLECTION]
+        with _write_lock:
+            # A duplicate delivery must not increment a different Khaifa row.
+            existing = collection.find_one(
+                {"chat_id": chat_id, "active_ids": record_id},
+                {"_id": 1},
+            )
+            if existing:
+                return record_id
+
+            counter_id = _counter_id(chat_id, key)
+            collection.update_one(
+                {"_id": counter_id},
+                {"$setOnInsert": {
+                    "chat_id": chat_id,
+                    "khaifa": label,
+                    "khaifa_key": key,
+                    "count": 0,
+                    "active_ids": [],
+                }},
+                upsert=True,
+            )
+            collection.update_one(
+                {"_id": counter_id, "active_ids": {"$ne": record_id}},
+                {
+                    "$inc": {"count": 1},
+                    "$addToSet": {"active_ids": record_id},
+                    "$set": {"khaifa": label, "khaifa_key": key},
+                },
+            )
         return record_id
     except Exception:
         return None
 
 
 def backfill_active_records(db, data_msg_map):
-    """One-time import of still-active daily report-map entries into month totals.
+    """Migrate legacy per-submission documents to one counter per Khaifa.
 
-    A per-group marker makes this idempotent across restarts and prevents an
-    already-cleared month's old daily mappings from being re-added later.
+    Existing month totals are preserved. Only still-active reply mappings are
+    copied into active_ids, so '-' remains reversible for today's submissions.
+    A version marker makes the migration safe across restarts and after clear.
     """
-    if db is None or not data_msg_map:
+    if db is None:
         return 0
 
-    grouped = {}
-    for map_key, record in list(data_msg_map.items()):
-        if not isinstance(map_key, tuple) or len(map_key) != 2 or not isinstance(record, dict):
-            continue
-        chat_id = str(record.get("chat_id") or map_key[0])
-        grouped.setdefault(chat_id, []).append((map_key[1], record))
+    try:
+        _ensure_index(db)
+        legacy = db[LEGACY_COLLECTION]
+        counters = db[COLLECTION]
+        meta = db[META_COLLECTION]
 
-    migrated = 0
-    meta = db["monthly_total_meta"]
-    for chat_id, items in grouped.items():
-        try:
-            marker = meta.find_one({"_id": chat_id, "initial_backfill_done": True})
-        except Exception:
-            continue
-        if marker:
-            continue
+        map_by_group = {}
+        for map_key, record in list((data_msg_map or {}).items()):
+            if (
+                not isinstance(map_key, tuple)
+                or len(map_key) != 2
+                or not isinstance(record, dict)
+            ):
+                continue
+            chat_id = str(record.get("chat_id") or map_key[0])
+            map_by_group.setdefault(chat_id, []).append((map_key[1], record))
 
-        failed = False
-        for reply_message_id, record in items:
-            if record.get("monthly_record_id"):
+        legacy_rows = list(legacy.find({}))
+        legacy_by_group = {}
+        for row in legacy_rows:
+            if not isinstance(row, dict):
                 continue
-            fields = str(record.get("entry") or "").split("    ", 2)
-            if len(fields) < 2:
-                continue
-            label, key = normalize_khaifa(fields[1])
-            if label is None or key is None:
-                continue
-            record_id = save_record(db, chat_id, int(reply_message_id), label)
-            if record_id is None:
-                failed = True
-                continue
-            record["monthly_record_id"] = record_id
-            migrated += 1
+            chat_id = str(row.get("chat_id") or "")
+            if chat_id:
+                legacy_by_group.setdefault(chat_id, []).append(row)
 
-        if not failed:
-            try:
-                meta.update_one(
-                    {"_id": chat_id},
-                    {"$set": {"initial_backfill_done": True}},
+        group_ids = set(map_by_group) | set(legacy_by_group)
+        migrated = 0
+        for chat_id in group_ids:
+            marker = meta.find_one({"_id": chat_id}) or {}
+            if int(marker.get("storage_version", 0) or 0) >= STORAGE_VERSION:
+                # Clean up leftovers from an interrupted migration.
+                legacy.delete_many({"chat_id": chat_id})
+                continue
+
+            rows = legacy_by_group.get(chat_id, [])
+            legacy_by_id = {str(row.get("_id")): row for row in rows}
+            grouped = {}
+            for row in rows:
+                label, key = normalize_khaifa(
+                    row.get("khaifa") or row.get("khaifa_key")
+                )
+                if not label or not key:
+                    continue
+                item = grouped.setdefault(key, {"label": label, "count": 0, "active_ids": []})
+                item["count"] += 1
+                migrated += 1
+
+            initial_backfill_allowed = not bool(marker.get("initial_backfill_done"))
+            for reply_message_id, record in map_by_group.get(chat_id, []):
+                record_id = str(
+                    record.get("monthly_record_id")
+                    or f"{chat_id}:{int(reply_message_id)}"
+                )
+                old_row = legacy_by_id.get(record_id)
+                if old_row:
+                    label, key = normalize_khaifa(
+                        old_row.get("khaifa") or old_row.get("khaifa_key")
+                    )
+                elif initial_backfill_allowed:
+                    label, key = _entry_khaifa(record)
+                    if label and key:
+                        item = grouped.setdefault(
+                            key, {"label": label, "count": 0, "active_ids": []}
+                        )
+                        item["count"] += 1
+                        migrated += 1
+                else:
+                    # A previously cleared month must not be repopulated from
+                    # old daily reply mappings.
+                    continue
+
+                if not label or not key:
+                    continue
+                item = grouped.setdefault(
+                    key, {"label": label, "count": 0, "active_ids": []}
+                )
+                if record_id in legacy_by_id or initial_backfill_allowed:
+                    if record_id not in item["active_ids"]:
+                        item["active_ids"].append(record_id)
+                    record["monthly_record_id"] = record_id
+                    record["monthly_key"] = key
+
+            # Replace any partially written v2 counters with exact values
+            # derived from the legacy source before marking the migration done.
+            counters.delete_many({"chat_id": chat_id})
+            for key, item in grouped.items():
+                counters.update_one(
+                    {"_id": _counter_id(chat_id, key)},
+                    {"$set": {
+                        "chat_id": chat_id,
+                        "khaifa_key": key,
+                        "khaifa": item["label"],
+                        "count": int(item["count"]),
+                        "active_ids": list(dict.fromkeys(item["active_ids"])),
+                    }},
                     upsert=True,
                 )
-            except Exception:
-                # Re-running is safe because source message IDs are idempotent.
-                pass
-    return migrated
+
+            meta.update_one(
+                {"_id": chat_id},
+                {"$set": {
+                    "initial_backfill_done": True,
+                    "storage_version": STORAGE_VERSION,
+                }},
+                upsert=True,
+            )
+            legacy.delete_many({"chat_id": chat_id})
+
+        return migrated
+    except Exception:
+        # Keep legacy data untouched when migration cannot be completed.
+        return 0
 
 
 def get_totals(db, chat_id):
@@ -119,49 +242,72 @@ def get_totals(db, chat_id):
         return None
     try:
         _ensure_index(db)
-        pipeline = [
-            {"$match": {"chat_id": str(chat_id)}},
-            {"$group": {
-                "_id": "$khaifa_key",
-                "label": {"$first": "$khaifa"},
-                "count": {"$sum": 1},
-            }},
-            {"$sort": {"_id": 1}},
+        rows = db[COLLECTION].find({"chat_id": str(chat_id)})
+        totals = [
+            {
+                "khaifa": str(row.get("khaifa") or row.get("khaifa_key") or ""),
+                "count": int(row.get("count", 0) or 0),
+            }
+            for row in rows
+            if int(row.get("count", 0) or 0) > 0
         ]
-        return [
-            {"khaifa": str(x.get("label") or x.get("_id") or ""),
-             "count": int(x.get("count", 0))}
-            for x in db[COLLECTION].aggregate(pipeline, maxTimeMS=5000)
-            if int(x.get("count", 0)) > 0
-        ]
+        return sorted(totals, key=lambda row: str(row["khaifa"]).casefold())
     except Exception:
         return None
 
 
 def remove_record(db, chat_id, record_id):
+    """Reverse an active record once; old IDs after clear cannot touch new counts."""
     if not record_id:
         return True
     if db is None:
         return False
     try:
-        db[COLLECTION].delete_one({"_id": str(record_id), "chat_id": str(chat_id)})
+        _ensure_index(db)
+        with _write_lock:
+            db[COLLECTION].update_one(
+                {
+                    "chat_id": str(chat_id),
+                    "active_ids": str(record_id),
+                    "count": {"$gt": 0},
+                },
+                {
+                    "$inc": {"count": -1},
+                    "$pull": {"active_ids": str(record_id)},
+                },
+            )
+        # No matching active ID is expected after a daily or monthly clear.
         return True
     except Exception:
         return False
 
 
+def clear_active_records(db, chat_id):
+    """Forget current-day reversal IDs without changing month-to-date totals."""
+    if db is None:
+        return None
+    try:
+        _ensure_index(db)
+        with _write_lock:
+            result = db[COLLECTION].update_many(
+                {"chat_id": str(chat_id)},
+                {"$set": {"active_ids": []}},
+            )
+        return int(getattr(result, "modified_count", 0) or 0)
+    except Exception:
+        return None
+
+
 def clear_records(db, chat_id):
-    """Clear this group's records one-by-one after an explicit confirmation."""
+    """Clear one group's monthly counters in a single bulk delete."""
     if db is None:
         return None
     try:
         collection = db[COLLECTION]
-        cursor = collection.find({"chat_id": str(chat_id)}, {"_id": 1})
-        deleted = 0
-        for record in cursor:
-            result = collection.delete_one({"_id": record["_id"], "chat_id": str(chat_id)})
-            deleted += int(result.deleted_count)
-        return deleted
+        rows = list(collection.find({"chat_id": str(chat_id)}, {"count": 1}))
+        total = sum(int(row.get("count", 0) or 0) for row in rows)
+        collection.delete_many({"chat_id": str(chat_id)})
+        return total
     except Exception:
         return None
 

@@ -8,57 +8,114 @@ import monthly_total as mt
 
 
 class _Result:
-    def __init__(self, deleted_count=0):
+    def __init__(self, matched_count=0, modified_count=0, deleted_count=0):
+        self.matched_count = matched_count
+        self.modified_count = modified_count
         self.deleted_count = deleted_count
 
 
 class _Collection:
     def __init__(self):
         self.rows = {}
+        self.indexes = []
 
     def create_index(self, *args, **kwargs):
-        return "monthly-index"
+        self.indexes.append(args[0] if args else None)
+        return f"index-{len(self.indexes)}"
 
-    def update_one(self, query, update, upsert=False):
-        key = query["_id"]
-        if key not in self.rows and upsert:
-            self.rows[key] = {"_id": key}
-        if key not in self.rows:
-            return
-        self.rows[key].update(update.get("$setOnInsert", {}))
-        self.rows[key].update(update.get("$set", {}))
+    @staticmethod
+    def _matches(row, query):
+        for key, expected in query.items():
+            actual = row.get(key)
+            if isinstance(expected, dict):
+                if "$ne" in expected:
+                    excluded = expected["$ne"]
+                    if actual == excluded or (
+                        isinstance(actual, list) and excluded in actual
+                    ):
+                        return False
+                if "$gt" in expected and not (actual is not None and actual > expected["$gt"]):
+                    return False
+            elif isinstance(actual, list):
+                if expected not in actual:
+                    return False
+            elif actual != expected:
+                return False
+        return True
 
-    def find_one(self, query):
-        row = self.rows.get(query["_id"])
-        if row and all(row.get(k) == v for k, v in query.items() if k != "_id"):
-            return dict(row)
+    def find_one(self, query, projection=None):
+        for row in self.rows.values():
+            if self._matches(row, query):
+                return dict(row)
         return None
 
-    def aggregate(self, pipeline, maxTimeMS=None):
-        match = pipeline[0]["$match"]["chat_id"]
-        grouped = {}
-        for row in self.rows.values():
-            if row["chat_id"] != match:
-                continue
-            key = row["khaifa_key"]
-            if key not in grouped:
-                grouped[key] = {"_id": key, "label": row["khaifa"], "count": 0}
-            grouped[key]["count"] += 1
-        return [grouped[key] for key in sorted(grouped)]
-
-    def find(self, query, projection=None):
+    def find(self, query=None, projection=None):
+        query = query or {}
         return [
-            {"_id": row["_id"]}
-            for row in self.rows.values()
-            if row["chat_id"] == query["chat_id"]
+            dict(row) for row in self.rows.values()
+            if self._matches(row, query)
         ]
 
+    def update_one(self, query, update, upsert=False):
+        row = None
+        key = query.get("_id")
+        if key is not None:
+            candidate = self.rows.get(key)
+            if candidate is not None and self._matches(candidate, query):
+                row = candidate
+        else:
+            for candidate in self.rows.values():
+                if self._matches(candidate, query):
+                    row = candidate
+                    break
+
+        inserted = False
+        if row is None and upsert and key is not None:
+            row = {"_id": key}
+            self.rows[key] = row
+            inserted = True
+        if row is None:
+            return _Result()
+
+        if inserted:
+            row.update(update.get("$setOnInsert", {}))
+        row.update(update.get("$set", {}))
+        for field, amount in update.get("$inc", {}).items():
+            row[field] = row.get(field, 0) + amount
+        for field, value in update.get("$addToSet", {}).items():
+            values = row.setdefault(field, [])
+            if value not in values:
+                values.append(value)
+        for field, value in update.get("$pull", {}).items():
+            row[field] = [item for item in row.get(field, []) if item != value]
+        return _Result(matched_count=1, modified_count=1)
+
+    def update_many(self, query, update):
+        matched = modified = 0
+        for row in self.rows.values():
+            if not self._matches(row, query):
+                continue
+            matched += 1
+            before = dict(row)
+            row.update(update.get("$set", {}))
+            modified += int(row != before)
+        return _Result(matched_count=matched, modified_count=modified)
+
+    def delete_many(self, query):
+        keys = [
+            key for key, row in self.rows.items()
+            if self._matches(row, query)
+        ]
+        for key in keys:
+            del self.rows[key]
+        return _Result(deleted_count=len(keys))
+
     def delete_one(self, query):
-        row = self.rows.get(query["_id"])
-        if row and row["chat_id"] == query["chat_id"]:
-            del self.rows[query["_id"]]
-            return _Result(1)
-        return _Result(0)
+        for key, row in list(self.rows.items()):
+            if self._matches(row, query):
+                del self.rows[key]
+                return _Result(deleted_count=1)
+        return _Result()
 
 
 class _DB:
@@ -83,61 +140,151 @@ class MonthlyTotalTests(unittest.TestCase):
         self.assertEqual(label, "文泰")
         self.assertEqual(key, "文泰")
 
-    def test_save_is_idempotent_and_group_scoped(self):
-        first = mt.save_record(self.db, "-1001", 10, "文泰")
-        again = mt.save_record(self.db, "-1001", 10, "文泰")
-        other = mt.save_record(self.db, "-1002", 10, "文泰")
-        self.assertEqual(first, again)
-        self.assertNotEqual(first, other)
-        totals = mt.get_totals(self.db, "-1001")
-        self.assertEqual(totals, [{"khaifa": "文泰", "count": 1}])
+    def test_storage_is_one_document_per_group_and_khaifa(self):
+        for message_id in range(100, 150):
+            self.assertIsNotNone(
+                mt.save_record(self.db, "-1001", message_id, "文泰")
+            )
+        mt.save_record(self.db, "-1001", 200, "清风️")
+        mt.save_record(self.db, "-1002", 100, "文泰")
 
-    def test_multiple_khaifa_values_are_counted_silently(self):
-        for msg_id, value in enumerate(
-            ["文泰", "文泰", "文泰", "文泰", "清风️", "清风️", "清风️"], start=100
-        ):
-            mt.save_record(self.db, "-1001", msg_id, value)
+        rows = self.db[mt.COLLECTION].rows
+        self.assertEqual(len(rows), 3)
         self.assertEqual(
             mt.get_totals(self.db, "-1001"),
             [
-                {"khaifa": "文泰", "count": 4},
-                {"khaifa": "清风️", "count": 3},
+                {"khaifa": "文泰", "count": 50},
+                {"khaifa": "清风️", "count": 1},
             ],
+        )
+
+    def test_save_is_idempotent_and_group_scoped(self):
+        first = mt.save_record(self.db, "-1001", 10, "文泰")
+        again = mt.save_record(self.db, "-1001", 10, "文泰")
+        other_group = mt.save_record(self.db, "-1002", 10, "文泰")
+        self.assertEqual(first, again)
+        self.assertNotEqual(first, other_group)
+        self.assertEqual(
+            mt.get_totals(self.db, "-1001"),
+            [{"khaifa": "文泰", "count": 1}],
+        )
+
+    def test_same_message_id_cannot_increment_a_different_khaifa(self):
+        first = mt.save_record(self.db, "-1001", 10, "文泰")
+        again = mt.save_record(self.db, "-1001", 10, "清风")
+        self.assertEqual(first, again)
+        self.assertEqual(
+            mt.get_totals(self.db, "-1001"),
+            [{"khaifa": "文泰", "count": 1}],
         )
 
     def test_emoji_presentation_selector_does_not_split_same_label(self):
         mt.save_record(self.db, "-1001", 20, "清风️")
         mt.save_record(self.db, "-1001", 21, "清风")
-        totals = mt.get_totals(self.db, "-1001")
-        self.assertEqual(len(totals), 1)
-        self.assertEqual(totals[0]["count"], 2)
+        self.assertEqual(
+            mt.get_totals(self.db, "-1001"),
+            [{"khaifa": "清风", "count": 2}],
+        )
 
-    def test_minus_removes_only_the_linked_monthly_record(self):
+    def test_minus_reverses_only_the_linked_active_record_once(self):
         first = mt.save_record(self.db, "-1001", 10, "文泰")
         mt.save_record(self.db, "-1001", 11, "文泰")
+        self.assertTrue(mt.remove_record(self.db, "-1001", first))
         self.assertTrue(mt.remove_record(self.db, "-1001", first))
         self.assertEqual(
             mt.get_totals(self.db, "-1001"),
             [{"khaifa": "文泰", "count": 1}],
         )
 
-    def test_startup_backfill_runs_once_and_survives_month_clear(self):
-        data_msg_map = {
-            (-1001, 500): {
-                "chat_id": "-1001",
-                "entry": "1/11    文泰    client-one",
+    def test_daily_clear_forgets_reversal_ids_but_preserves_month_total(self):
+        old_id = mt.save_record(self.db, "-1001", 10, "文泰")
+        mt.save_record(self.db, "-1001", 11, "文泰")
+        self.assertEqual(mt.clear_active_records(self.db, "-1001"), 1)
+
+        # A delayed '-' from the previous daily window must not decrement.
+        mt.remove_record(self.db, "-1001", old_id)
+        self.assertEqual(
+            mt.get_totals(self.db, "-1001"),
+            [{"khaifa": "文泰", "count": 2}],
+        )
+
+        new_id = mt.save_record(self.db, "-1001", 12, "文泰")
+        mt.remove_record(self.db, "-1001", new_id)
+        self.assertEqual(
+            mt.get_totals(self.db, "-1001"),
+            [{"khaifa": "文泰", "count": 2}],
+        )
+
+    def test_monthly_clear_does_not_allow_old_minus_to_touch_new_month(self):
+        old_id = mt.save_record(self.db, "-1001", 10, "文泰")
+        mt.save_record(self.db, "-1001", 11, "文泰")
+        self.assertEqual(mt.clear_records(self.db, "-1001"), 2)
+
+        new_id = mt.save_record(self.db, "-1001", 12, "文泰")
+        mt.remove_record(self.db, "-1001", old_id)
+        self.assertEqual(
+            mt.get_totals(self.db, "-1001"),
+            [{"khaifa": "文泰", "count": 1}],
+        )
+        mt.remove_record(self.db, "-1001", new_id)
+        self.assertEqual(mt.get_totals(self.db, "-1001"), [])
+
+    def test_clear_only_removes_the_selected_group_and_returns_submission_count(self):
+        mt.save_record(self.db, "-1001", 10, "文泰")
+        mt.save_record(self.db, "-1001", 11, "文泰")
+        mt.save_record(self.db, "-1001", 12, "清风")
+        mt.save_record(self.db, "-1002", 10, "文泰")
+
+        self.assertEqual(mt.clear_records(self.db, "-1001"), 3)
+        self.assertEqual(mt.get_totals(self.db, "-1001"), [])
+        self.assertEqual(
+            mt.get_totals(self.db, "-1002"),
+            [{"khaifa": "文泰", "count": 1}],
+        )
+
+    def test_legacy_migration_preserves_month_totals_and_active_minus(self):
+        legacy = self.db[mt.LEGACY_COLLECTION]
+        legacy.rows = {
+            "-1001:500": {
+                "_id": "-1001:500", "chat_id": "-1001",
+                "message_id": 500, "khaifa": "文泰", "khaifa_key": "文泰",
             },
-            (-1001, 502): {
-                "chat_id": "-1001",
-                "entry": "31/10    清风️    client-two",
+            "-1001:501": {
+                "_id": "-1001:501", "chat_id": "-1001",
+                "message_id": 501, "khaifa": "文泰", "khaifa_key": "文泰",
             },
-            (-1001, 504): {
-                "chat_id": "-1001",
-                "entry": "1/11    -    excluded",
+            "-1001:502": {
+                "_id": "-1001:502", "chat_id": "-1001",
+                "message_id": 502, "khaifa": "清风️", "khaifa_key": "清风",
             },
         }
-        self.assertEqual(mt.backfill_active_records(self.db, data_msg_map), 2)
-        self.assertTrue(data_msg_map[(-1001, 500)]["monthly_record_id"])
+        mapping = {
+            (-1001, 900): {
+                "chat_id": "-1001", "entry": "1/11    文泰    client",
+                "monthly_record_id": "-1001:500",
+            },
+            (-1001, 901): {
+                "chat_id": "-1001", "entry": "1/11    文泰    client",
+                "monthly_record_id": "-1001:501",
+            },
+        }
+
+        self.assertEqual(mt.backfill_active_records(self.db, mapping), 3)
+        self.assertEqual(
+            mt.get_totals(self.db, "-1001"),
+            [
+                {"khaifa": "文泰", "count": 2},
+                {"khaifa": "清风️", "count": 1},
+            ],
+        )
+        self.assertEqual(legacy.rows, {})
+        self.assertEqual(
+            mapping[(-1001, 900)]["monthly_key"],
+            "文泰",
+        )
+        self.assertTrue(
+            mt.remove_record(self.db, "-1001", mapping[(-1001, 900)]["monthly_record_id"])
+        )
         self.assertEqual(
             mt.get_totals(self.db, "-1001"),
             [
@@ -145,26 +292,53 @@ class MonthlyTotalTests(unittest.TestCase):
                 {"khaifa": "清风️", "count": 1},
             ],
         )
-        self.assertEqual(mt.backfill_active_records(self.db, data_msg_map), 0)
+        self.assertEqual(mt.backfill_active_records(self.db, mapping), 0)
 
-        # A manually cleared month must not be re-imported on a later restart.
-        self.assertEqual(mt.clear_records(self.db, "-1001"), 2)
-        self.assertEqual(mt.backfill_active_records(self.db, data_msg_map), 0)
-        self.assertEqual(mt.get_totals(self.db, "-1001"), [])
-
-    def test_clear_only_removes_the_selected_group(self):
-        mt.save_record(self.db, "-1001", 10, "文泰")
-        mt.save_record(self.db, "-1001", 11, "清风️")
-        mt.save_record(self.db, "-1002", 10, "文泰")
-        self.assertEqual(mt.clear_records(self.db, "-1001"), 2)
+    def test_initial_backfill_runs_once_for_older_active_maps(self):
+        mapping = {
+            (-1001, 500): {
+                "chat_id": "-1001",
+                "entry": "1/11    文泰    client-one",
+            },
+            (-1001, 502): {
+                "chat_id": "-1001",
+                "entry": "1/11    清风️    client-two",
+            },
+            (-1001, 504): {
+                "chat_id": "-1001",
+                "entry": "1/11    -    excluded",
+            },
+        }
+        self.assertEqual(mt.backfill_active_records(self.db, mapping), 2)
         self.assertEqual(
             mt.get_totals(self.db, "-1001"),
-            [],
+            [
+                {"khaifa": "文泰", "count": 1},
+                {"khaifa": "清风️", "count": 1},
+            ],
         )
         self.assertEqual(
-            mt.get_totals(self.db, "-1002"),
-            [{"khaifa": "文泰", "count": 1}],
+            mapping[(-1001, 500)]["monthly_record_id"],
+            "-1001:500",
         )
+        self.assertEqual(mt.backfill_active_records(self.db, mapping), 0)
+
+    def test_previously_cleared_month_is_not_repopulated_from_old_map(self):
+        self.db[mt.META_COLLECTION].rows["-1001"] = {
+            "_id": "-1001",
+            "initial_backfill_done": True,
+        }
+        mapping = {
+            (-1001, 500): {
+                "chat_id": "-1001",
+                "entry": "1/11    文泰    old-client",
+                "monthly_record_id": "-1001:500",
+            }
+        }
+        self.assertEqual(mt.backfill_active_records(self.db, mapping), 0)
+        self.assertEqual(mt.get_totals(self.db, "-1001"), [])
+        self.assertTrue(mt.remove_record(self.db, "-1001", "-1001:500"))
+        self.assertEqual(mt.get_totals(self.db, "-1001"), [])
 
 
 if __name__ == "__main__":
