@@ -5,7 +5,6 @@ import math
 import logging
 import asyncio
 import secrets
-import unicodedata
 from collections.abc import Mapping
 from html import escape as html_escape
 import threading
@@ -34,6 +33,13 @@ from telegram import (
 from telegram.ext import CallbackContext
 from telegram.error import BadRequest
 from web_server import keep_alive
+from monthly_total import (
+    BUTTON_TEXT as MONTHLY_TOTAL_BUTTON_TEXT,
+    save_record as save_monthly_total_record,
+    remove_record as remove_monthly_total_record,
+    total_command as monthly_total_command_impl,
+    clear_callback as monthly_total_clear_callback_impl,
+)
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -86,18 +92,6 @@ CUSTOM_MSG_LABELS = {
     "cleardata_cancelled":"❌ /cleardata — Cancelled confirmation message",
     "showdata_empty":   "📭 /showdata — No data message",
     "showdata_footer":  "💬 /showdata — Footer hint",
-    "monthly_total_button": "📊 Monthly Total — Group reply-keyboard button",
-    "monthly_total_empty": "📭 Monthly Total — Empty state",
-    "monthly_total_footer": "⚠️ Monthly Total — End-of-month reminder",
-    "monthly_total_db_error": "❌ Monthly Total — Database unavailable",
-    "monthly_total_group_only": "🔒 Monthly Total — Group-only message",
-    "monthly_clear_button": "🗑️ Monthly Clear Data — Danger inline button",
-    "monthly_clear_confirm": "⚠️ Monthly Clear Data — Confirmation prompt",
-    "monthly_clear_cancelled": "↩️ Monthly Clear Data — Cancelled message",
-    "monthly_clear_success": "✅ Monthly Clear Data — Success ({count})",
-    "monthly_clear_db_error": "❌ Monthly Clear Data — Database error",
-    "monthly_clear_expired": "⌛ Monthly Clear Data — Expired confirmation",
-    "monthly_clear_admin_only": "🔒 Monthly Clear Data — Group Owner/Admin only",
     "total_plus_empty": "📊 /total_plus — No data message",
     "total_plus_footer":"💬 /total_plus — Footer hint",
     "reset_plus_empty": "📊 /reset_plus — No counter message",
@@ -109,6 +103,7 @@ CUSTOM_MSG_LABELS = {
     "owner_only_action_denied": "🔒 Owner-only actions — Access denied message",
     # Customizable reply-keyboard buttons
     "showdata_button": "📊 Showdata — Reply Keyboard button",
+    "monthly_total_button": "📊 Monthly Total — Group reply-keyboard button",
     "total_plus_button": "🔢 Total Plus — Reply Keyboard button",
     "clear_data_button": "🗑️ Clear Data — Reply Keyboard button",
     "reset_plus_button": "🔄 Reset Plus — Reply Keyboard button",
@@ -213,25 +208,6 @@ DEFAULT_MSGS: dict = {
     "cleardata_cancelled": "❌ Clear data လုပ်ဆောင်ချက်ကို cancel လုပ်လိုက်ပါပြီ။",
     "showdata_empty":    "No data collected yet for today ({today}) in this chat.",
     "showdata_footer":   "{mention} report ပြင်ဆင်ပြီးပါက /cleardata နှိပ်ပါ။",
-    "monthly_total_button": "Monthly Total",
-    "monthly_total_empty": "ဤ Group တွင် Monthly Total အတွက် ရေတွက်ထားသော Khaifa data မရှိသေးပါ။",
-    "monthly_total_footer": (
-        "ဤ Monthly Total Data ကို လကုန်ရန် နောက်ဆုံးရက်တွင် အလုပ်မဆင်းခင်အချိန်တွင် "
-        "Monthly Clear Data ကို နှိပ်ပါ။ မနှိပ်ပါက Bot အသုံးပြုခွင့်ကို ပိတ်ပါမည်။"
-    ),
-    "monthly_total_db_error": "❌ Monthly Total Data ကို Database မှ ဖတ်၍မရပါ။ ခဏအကြာတွင် ထပ်စမ်းပါ။",
-    "monthly_total_group_only": "❌ Monthly Total ကို Group Chat ထဲတွင်သာ အသုံးပြုနိုင်ပါသည်။",
-    "monthly_clear_button": "Monthly Clear Data",
-    "monthly_clear_confirm": (
-        "⚠️ ဤ Group ၏ Monthly Total Data အားလုံးကို အပြီးတိုင် ရှင်းလင်းမည်။\n\n"
-        "လက်ရှိ Monthly Total records များကို Database မှ ဖျက်မည်ဖြစ်ပါသည်။\n"
-        "ဆက်လက်လုပ်ဆောင်မည်လား?"
-    ),
-    "monthly_clear_cancelled": "↩️ Monthly Clear Data လုပ်ဆောင်ချက်ကို ပယ်ဖျက်လိုက်ပါပြီ။\nလက်ရှိ data များကို မပြောင်းလဲထားပါ။",
-    "monthly_clear_success": "✅ Monthly Total Data ရှင်းလင်းပြီးပါပြီ။\n🗑️ ဤ Group မှ record {count} ခုကို Database မှ ဖျက်ပြီးပါပြီ။",
-    "monthly_clear_db_error": "❌ Monthly Total Data ကို Database မှ မဖျက်နိုင်ပါ။ Data များကို မပြောင်းလဲထားပါ။ ခဏအကြာတွင် ထပ်စမ်းပါ။",
-    "monthly_clear_expired": "⌛ ဤ confirmation သည် သက်တမ်းကုန်သွားပါပြီ။ Monthly Total ကို ပြန်ဖွင့်ပြီး ထပ်စမ်းပါ။",
-    "monthly_clear_admin_only": "🔒 Monthly Clear Data ကို ဤ Group ၏ Owner သို့မဟုတ် Admin များသာ အသုံးပြုနိုင်ပါသည်။",
     "total_plus_empty":  "📊 ဤ chat တွင် (+) reply မရှိသေးပါ။",
     "total_plus_footer": "{mention} အလုပ်ဆင်းမည်ဆိုပါက /reset_plus နှိပ်ခဲ့ပါ",
     "reset_plus_empty":  "📊 ဤ chat တွင် ရှင်လင်းစရာ Plus counter မရှိသေးပါ။",
@@ -243,6 +219,7 @@ DEFAULT_MSGS: dict = {
     "owner_only_action_denied": "❌ ဤလုပ်ဆောင်ချက်ကို Bot Owner သာ အသုံးပြုနိုင်ပါသည်။",
     # Reply-keyboard labels (rendered as plain text if no custom emoji is configured)
     "showdata_button": "Showdata",
+    "monthly_total_button": MONTHLY_TOTAL_BUTTON_TEXT,
     "total_plus_button": "Total Plus",
     "clear_data_button": "Clear Data",
     "reset_plus_button": "Reset Plus",
@@ -463,12 +440,11 @@ _SCHEDULE_ACTION_BUTTON_KEYS = {
     "schedule_remove_cancel_button",
     "schedule_delete_button",
     "schedule_delete_cancel_button",
-    "monthly_clear_button",
 }
 _REPLY_KEYBOARD_BUTTON_KEYS = {
     "showdata_button",
-    "total_plus_button",
     "monthly_total_button",
+    "total_plus_button",
     "clear_data_button",
     "reset_plus_button",
     "clear_all_button",
@@ -2633,135 +2609,6 @@ def mg_delete_all_group_data(chat_id: str) -> None:
         logging.warning(f"MongoDB mg_delete_all_group_data error: {e}")
 
 
-# ============================================================
-# MONTHLY KHAIFA TOTALS (independent from daily group_data)
-# ============================================================
-MONTHLY_TOTAL_COLLECTION = "monthly_total_entries"
-MONTHLY_CLEAR_CONFIRM_TTL_SECONDS = 600
-_monthly_total_indexes_ready = False
-
-
-def _normalize_monthly_khaifa(value: str | None) -> tuple[str | None, str | None]:
-    """Normalize a Khaifa label while preserving its display form and emoji selectors."""
-    if value is None:
-        return None, None
-    label = unicodedata.normalize("NFC", str(value))
-    label = re.sub(r"\s+", " ", label).strip()
-    key = label.casefold()
-    if key in {"", "-", "—", "–", "−", "－", "n/a", "na", "none", "null"}:
-        return None, None
-    return label, key
-
-
-def _ensure_monthly_total_indexes(db) -> None:
-    """Create the group+Khaifa query index once per process."""
-    global _monthly_total_indexes_ready
-    if _monthly_total_indexes_ready:
-        return
-    try:
-        db[MONTHLY_TOTAL_COLLECTION].create_index(
-            [("chat_id", 1), ("khaifa_key", 1)],
-            name="idx_monthly_total_chat_khaifa",
-        )
-        _monthly_total_indexes_ready = True
-    except PyMongoError as exc:
-        # Correctness does not depend on this optional performance index.
-        logging.warning("Monthly Total index creation failed: %s", exc)
-
-
-def mg_save_monthly_total_record(
-    chat_id: str, message_id: int, khaifa_value: str
-) -> str | None:
-    """Idempotently save only the Khaifa value for one group submission."""
-    label, key = _normalize_monthly_khaifa(khaifa_value)
-    if label is None or key is None:
-        return None
-    db = get_mongo_db()
-    if db is None:
-        return None
-    record_id = f"{chat_id}:{int(message_id)}"
-    try:
-        _ensure_monthly_total_indexes(db)
-        db[MONTHLY_TOTAL_COLLECTION].update_one(
-            {"_id": record_id},
-            {"$setOnInsert": {
-                "chat_id": str(chat_id),
-                "message_id": int(message_id),
-                "khaifa": label,
-                "khaifa_key": key,
-            }},
-            upsert=True,
-        )
-        return record_id
-    except PyMongoError as exc:
-        logging.warning("Monthly Total record save failed for %s: %s", record_id, exc)
-        return None
-
-
-def mg_get_monthly_total_records(chat_id: str) -> list[dict] | None:
-    """Return per-Khaifa counts for one group since its last Monthly Clear Data."""
-    db = get_mongo_db()
-    if db is None:
-        return None
-    try:
-        _ensure_monthly_total_indexes(db)
-        pipeline = [
-            {"$match": {"chat_id": str(chat_id)}},
-            {"$group": {
-                "_id": "$khaifa_key",
-                "label": {"$first": "$khaifa"},
-                "count": {"$sum": 1},
-            }},
-            {"$sort": {"_id": 1}},
-        ]
-        rows = list(db[MONTHLY_TOTAL_COLLECTION].aggregate(pipeline, maxTimeMS=5000))
-        return [
-            {
-                "khaifa": str(row.get("label") or row.get("_id") or ""),
-                "count": int(row.get("count", 0)),
-            }
-            for row in rows
-            if int(row.get("count", 0)) > 0
-        ]
-    except PyMongoError as exc:
-        logging.warning("Monthly Total query failed for group %s: %s", chat_id, exc)
-        return None
-
-
-def mg_delete_monthly_total_record(chat_id: str, record_id: str) -> bool:
-    """Remove one monthly tally when its original daily entry is deleted with '-'.
-
-    True means the database operation succeeded (even if the record was already
-    removed by a monthly clear); False means the database was unavailable.
-    """
-    if not record_id:
-        return True
-    db = get_mongo_db()
-    if db is None:
-        return False
-    try:
-        db[MONTHLY_TOTAL_COLLECTION].delete_one(
-            {"_id": str(record_id), "chat_id": str(chat_id)}
-        )
-        return True
-    except PyMongoError as exc:
-        logging.warning("Monthly Total record delete failed for %s: %s", record_id, exc)
-        return False
-
-
-def mg_clear_monthly_total_records(chat_id: str) -> int | None:
-    """Delete only the current group's monthly tally records after confirmation."""
-    db = get_mongo_db()
-    if db is None:
-        return None
-    try:
-        result = db[MONTHLY_TOTAL_COLLECTION].delete_many({"chat_id": str(chat_id)})
-        return int(result.deleted_count)
-    except PyMongoError as exc:
-        logging.warning("Monthly Total clear failed for group %s: %s", chat_id, exc)
-        return None
-
-
 def get_all_duplicate_ids() -> list:
     """Return list of duplicate entry IDs from MongoDB group_data.
     Each item: {'id': str, 'poster_count': int, 'posters': list[str]}
@@ -3111,8 +2958,8 @@ async def main_menu_text_handler(update: Update, context: CallbackContext) -> No
     """Route current and legacy customizable reply-keyboard labels to their original actions."""
     handlers = {
         "showdata_button": show_data,
-        "total_plus_button": total_plus_command,
         "monthly_total_button": monthly_total_command,
+        "total_plus_button": total_plus_command,
         "clear_data_button": clear_data,
         "reset_plus_button": reset_plus_command,
         "clear_all_button": admin_clearall_command,
@@ -3652,18 +3499,16 @@ async def extract_and_save_data(update: Update, context: CallbackContext) -> Non
     existing.append(stored_entry)
     mg_save_group_data(chat_id, today_key, existing)
 
-    # Monthly totals are tracked independently from the daily collection because
-    # daily auto-clear must not erase month-to-date counts. Store only the Khaifa
-    # label (not Gmail, phone, bank, or ID fields) and use Telegram message_id as
-    # an idempotency key so duplicate updates cannot increment the tally twice.
+    # Keep a separate month-to-date count. Only Khaifa + source message ID
+    # are stored; private client fields are not copied to this collection.
     monthly_record_id = None
     if update.effective_chat and update.effective_chat.type in {"group", "supergroup"}:
-        monthly_record_id = mg_save_monthly_total_record(
-            chat_id, update.message.message_id, extracted_khaifa
+        monthly_record_id = save_monthly_total_record(
+            get_mongo_db(), chat_id, update.message.message_id, extracted_khaifa
         )
-        if _normalize_monthly_khaifa(extracted_khaifa)[0] and monthly_record_id is None:
-            logger.error(
-                "Monthly Total could not save Khaifa record for chat=%s message=%s",
+        if extracted_khaifa and extracted_khaifa.strip() not in {"-", "—", "–"} and monthly_record_id is None:
+            logging.error(
+                "Monthly Total save failed for group %s message %s",
                 chat_id, update.message.message_id,
             )
 
@@ -5757,13 +5602,12 @@ async def handle_minus_reply(update: Update, context: CallbackContext) -> None:
                 await context.application.persistence.flush()
 
         monthly_record_id = record.get("monthly_record_id")
-        if monthly_record_id and not mg_delete_monthly_total_record(
-            cid_str, monthly_record_id
+        if monthly_record_id and not remove_monthly_total_record(
+            get_mongo_db(), cid_str, monthly_record_id
         ):
             logging.error(
-                "Daily entry %s was removed but Monthly Total record %s "
-                "could not be removed from MongoDB.",
-                msg_key, monthly_record_id,
+                "Monthly Total reversal failed for chat=%s monthly_record_id=%s",
+                cid_str, monthly_record_id,
             )
 
         save_data_msg_map()
@@ -5923,175 +5767,14 @@ async def total_plus_command(update: Update, context: CallbackContext) -> None:
 
 
 async def monthly_total_command(update: Update, context: CallbackContext) -> None:
-    """Show this group's Khaifa counts since the last confirmed monthly clear."""
-    message = _update_message(update)
-    chat = update.effective_chat
-    if message is None or chat is None:
-        return
-    if chat.type not in {"group", "supergroup"}:
-        await _reply_custom(
-            message, context.application.bot_data, "monthly_total_group_only"
-        )
-        return
-
-    totals = mg_get_monthly_total_records(str(chat.id))
-    if totals is None:
-        await _reply_custom(
-            message, context.application.bot_data, "monthly_total_db_error"
-        )
-        return
-
-    lines = ["📊 Monthly Total"]
-    if totals:
-        for item in totals:
-            label = str(item.get("khaifa") or "").strip()
-            count = int(item.get("count", 0))
-            if label and count > 0:
-                lines.append(f"{label}   -   {count}")
-    else:
-        lines.append(get_msg(context.application.bot_data, "monthly_total_empty"))
-
-    lines.extend([
-        "",
-        get_msg(context.application.bot_data, "monthly_total_footer"),
-    ])
-    clear_button = _confirmation_button(
-        context.application.bot_data,
-        "monthly_clear_button",
-        "monthly_clear_start",
-        "danger",
-    )
-    await message.reply_text(
-        "\n".join(lines),
-        reply_markup=InlineKeyboardMarkup([[clear_button]]),
-    )
+    await monthly_total_command_impl(update, context, get_db=get_mongo_db)
 
 
-async def monthly_total_clear_callback(
-    update: Update, context: CallbackContext
-) -> None:
-    """Two-step, admin-only clear of this group's monthly Khaifa records."""
-    query = update.callback_query
-    if query is None or query.message is None:
-        if query:
-            await query.answer()
-        return
-
-    message = query.message
-    chat = message.chat
-    user = query.from_user
-    if chat.type not in {"group", "supergroup"} or user is None:
-        await query.answer(
-            get_msg(context.application.bot_data, "monthly_total_group_only"),
-            show_alert=True,
-        )
-        return
-
-    chat_id = int(chat.id)
-    data = query.data or ""
-    bot_data = context.application.bot_data
-
-    if data == "monthly_clear_start":
-        allowed = await _is_group_schedule_admin(context, user.id, chat_id)
-        if not allowed:
-            await query.answer(
-                get_msg(bot_data, "monthly_clear_admin_only"),
-                show_alert=True,
-            )
-            return
-
-        current_totals = mg_get_monthly_total_records(str(chat_id))
-        if current_totals is None:
-            await query.answer(
-                get_msg(bot_data, "monthly_total_db_error"),
-                show_alert=True,
-            )
-            return
-        if not current_totals:
-            await query.answer("Monthly Total data မရှိသေးပါ။", show_alert=True)
-            return
-
-        token = secrets.token_urlsafe(6)
-        context.chat_data["monthly_total_clear_pending"] = {
-            "token": token,
-            "user_id": int(user.id),
-            "created_at": datetime.now().timestamp(),
-        }
-        keyboard = InlineKeyboardMarkup([[
-            _confirmation_button(
-                bot_data, "confirm_button",
-                f"monthly_clear_confirm_{token}", "success"
-            ),
-            _confirmation_button(
-                bot_data, "cancel_button",
-                f"monthly_clear_cancel_{token}", "danger"
-            ),
-        ]])
-        await query.answer()
-        await query.edit_message_text(
-            get_msg(bot_data, "monthly_clear_confirm"),
-            reply_markup=keyboard,
-        )
-        return
-
-    match = re.fullmatch(
-        r"monthly_clear_(confirm|cancel)_([A-Za-z0-9_-]{8,20})", data
-    )
-    if not match:
-        await query.answer()
-        return
-
-    action, token = match.groups()
-    pending = context.chat_data.get("monthly_total_clear_pending", {})
-    created_at = pending.get("created_at")
-    is_expired = (
-        not isinstance(created_at, (int, float))
-        or datetime.now().timestamp() - float(created_at)
-        > MONTHLY_CLEAR_CONFIRM_TTL_SECONDS
-    )
-    if (
-        is_expired
-        or pending.get("token") != token
-        or int(pending.get("user_id", 0)) != int(user.id)
-    ):
-        context.chat_data.pop("monthly_total_clear_pending", None)
-        await query.answer(
-            get_msg(bot_data, "monthly_clear_expired"),
-            show_alert=True,
-        )
-        return
-
-    allowed = await _is_group_schedule_admin(context, user.id, chat_id)
-    if not allowed:
-        await query.answer(
-            get_msg(bot_data, "monthly_clear_admin_only"),
-            show_alert=True,
-        )
-        return
-
-    if action == "cancel":
-        context.chat_data.pop("monthly_total_clear_pending", None)
-        await query.answer()
-        await query.edit_message_text(
-            get_msg(bot_data, "monthly_clear_cancelled")
-        )
-        return
-
-    deleted_count = mg_clear_monthly_total_records(str(chat_id))
-    if deleted_count is None:
-        context.chat_data.pop("monthly_total_clear_pending", None)
-        await query.answer()
-        await query.edit_message_text(
-            get_msg(bot_data, "monthly_clear_db_error")
-        )
-        return
-
-    context.chat_data.pop("monthly_total_clear_pending", None)
-    if context.application.persistence:
-        await context.application.persistence.flush()
-    await query.answer()
-    await query.edit_message_text(
-        get_msg(bot_data, "monthly_clear_success", count=deleted_count)
+async def monthly_total_clear_callback(update: Update, context: CallbackContext) -> None:
+    await monthly_total_clear_callback_impl(
+        update, context,
+        get_db=get_mongo_db,
+        is_group_admin=_is_group_schedule_admin,
     )
 
 
@@ -6205,9 +5888,7 @@ GUIDE_PAGES = [
             "Bot reply ပြန်သော message ကို\n"
             "<code>-</code> ဖြင့် reply ပြန်ပါ → ဆောင်ရွက်ပေးမည်။\n\n"
             "<b>/deposit_total</b> — Deposit report ကြည့်\n"
-            "<b>/whatsapp_total</b> — WhatsApp report ကြည့်\n\n"
-            "<b>📊 Monthly Total</b> — Group ၏ Khaifa value များကို နောက်ဆုံး Monthly Clear Data လုပ်ပြီးချိန်မှစ၍ စုစုပေါင်းရေတွက်သည်။\n"
-            "Month အဆုံးတွင် Monthly Clear Data ကို Group Admin က Confirm လုပ်၍ ရှင်းလင်းနိုင်သည်။"
+            "<b>/whatsapp_total</b> — WhatsApp report ကြည့်"
         ),
     },
     {
@@ -6595,332 +6276,10 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("showdata", show_data))
     application.add_handler(CommandHandler("cleardata", clear_data))
-    application.add_handler(CallbackQueryHandler(cleardata_callback, pattern=r'^cleardata_(confirm|cancel)    application.add_handler(CommandHandler("form", report_form_command))
-    application.add_handler(CommandHandler("stats", stats))
-    application.add_handler(CommandHandler("listusers", list_users))
-    application.add_handler(CommandHandler("listgroups", list_groups))
-    application.add_handler(
-        CommandHandler(
-            "allschedules", allschedules_command, filters=filters.ChatType.PRIVATE
-        )
-    )
-    application.add_handler(CommandHandler("listschedules", listschedules_command))
-    application.add_handler(CommandHandler("removeschedule", removeschedule_command))
-    application.add_handler(CommandHandler("admin", admin_command))
-    application.add_handler(CommandHandler("clearall", admin_clearall_command))
-    application.add_handler(CommandHandler("resetplusall", admin_resetplusall_command))
-    addbutton_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("addbutton", addbutton_command,
-                           filters=filters.ChatType.PRIVATE),
-        ],
-        states={
-            STARTBTN_AWAIT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND,
-                               addbutton_receive),
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", addbutton_receive)],
-        allow_reentry=True,
-    )
-    application.add_handler(addbutton_handler)
-    application.add_handler(CommandHandler("removebutton", removebutton_command))
-    application.add_handler(CommandHandler("listbuttons", listbuttons_command))
-    application.add_handler(CallbackQueryHandler(removebutton_callback, pattern=r'^rmbtn_'))
-    application.add_handler(CommandHandler("guide", guide_command))
-    application.add_handler(CallbackQueryHandler(guide_callback, pattern=r'^guide_page_\d+$'))
-    application.add_handler(CommandHandler("deposit_total", deposit_total_command))
-    application.add_handler(CommandHandler("whatsapp_total", whatsapp_total_command))
-    application.add_handler(CommandHandler("total_plus", total_plus_command))
-    application.add_handler(CommandHandler("reset_plus", reset_plus_command))
-    application.add_handler(CallbackQueryHandler(resetplus_callback, pattern=r'^resetplus_(confirm|cancel)$'))
-    plus_reaction_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler(
-                "setplusreaction",
-                plus_reaction_start,
-                filters=filters.ChatType.PRIVATE,
-            ),
-        ],
-        states={
-            PLUS_REACTION_AWAIT: [
-                CommandHandler("reset", plus_reaction_receive),
-                CommandHandler("cancel", plus_reaction_cancel),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, plus_reaction_receive),
-            ],
-        },
-        fallbacks=[
-            CommandHandler("cancel", plus_reaction_cancel),
-        ],
-        allow_reentry=True,
-        per_message=False,
-    )
-    application.add_handler(plus_reaction_handler)
-
-    application.add_handler(CallbackQueryHandler(clear_group_data_callback, pattern=r'^admin_clear_-?\d+$'))
-    application.add_handler(CallbackQueryHandler(cancel_group_action, pattern='^admin_cancel$'))
-    application.add_handler(CallbackQueryHandler(adminall_callback, pattern=r'^adminall_'))
-    bot_settings_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(bot_settings_menu, pattern='^adm_botsettings$')],
-        states={
-            BOT_SETTINGS_SELECT: [
-                CallbackQueryHandler(bot_settings_select, pattern='^admbs_(name|about|desc|photo)$'),
-                CallbackQueryHandler(bot_settings_cancel, pattern='^admbs_cancel$'),
-            ],
-            BOT_SETTINGS_AWAITING: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, bot_settings_apply),
-            ],
-            BOT_SETTINGS_PHOTO: [
-                MessageHandler(filters.PHOTO, bot_settings_photo_receive),
-            ],
-        },
-        fallbacks=[
-            CallbackQueryHandler(bot_settings_cancel, pattern='^admbs_cancel$'),
-            CommandHandler('cancel', cancel_conversation),
-        ],
-        allow_reentry=True, per_message=False,
-    )
-    application.add_handler(bot_settings_handler)
-
-    application.add_handler(CallbackQueryHandler(admin_panel_callback, pattern='^adm_'))
-
-
-
-
-
-    feedback_handler = ConversationHandler(
-        entry_points=[CommandHandler("feedback", start_feedback)],
-        states={FEEDBACK_AWAITING: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_feedback)]},
-        fallbacks=[CommandHandler('cancel', cancel_conversation)],
-        allow_reentry=True
-    )
-    application.add_handler(feedback_handler)
-
-    broadcast_handler = ConversationHandler(
-        entry_points=[CommandHandler("broadcast", broadcast_start, filters=filters.User(ADMIN_IDS))],
-        states={
-            BROADCAST_SELECT_CHAT: [CallbackQueryHandler(broadcast_select_chat, pattern='^bcast_id_')],
-            BROADCAST_AWAITING_MESSAGE: [MessageHandler(
-                (filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL |
-                 filters.AUDIO | filters.ANIMATION | filters.VOICE | filters.VIDEO_NOTE |
-                 filters.Sticker.ALL) & ~filters.COMMAND,
-                broadcast_await_message
-            )],
-            BROADCAST_CONFIRMATION: [CallbackQueryHandler(broadcast_confirm, pattern='^bcast_confirm$')]
-        },
-        fallbacks=[
-            CallbackQueryHandler(broadcast_cancel, pattern='^bcast_cancel$'),
-            CommandHandler('cancel', cancel_conversation)
-        ],
-        allow_reentry=True
-    )
-    application.add_handler(broadcast_handler)
-
-
-    application.add_handler(MessageHandler(filters.REPLY & filters.Regex(r'^\+$'), handle_plus_reply))
-    application.add_handler(MessageHandler(filters.REPLY & filters.Regex(r'^\-$'), handle_minus_reply))
-    application.add_handler(MessageHandler(filters.REPLY & filters.Regex(r'^(打枪|သာချန်း)$'), handle_daqiang_reply))
-
-    # Green alert — fires independently in group=3 so deposit/whatsapp handlers are unaffected
-    application.add_handler(MessageHandler(
-        (filters.TEXT | filters.CAPTION) & ~filters.COMMAND & filters.ChatType.GROUPS,
-        handle_green_report,
-    ), group=3)
-
-    application.add_handler(MessageHandler(
-        (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_deposit_report
-    ), group=1)
-    application.add_handler(MessageHandler(
-        (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_whatsapp_report
-    ), group=1)
-    application.add_handler(MessageHandler(
-        filters.UpdateType.EDITED_MESSAGE & (filters.TEXT | filters.CAPTION), handle_deposit_report_edit
-    ), group=1)
-    application.add_handler(MessageHandler(
-        filters.UpdateType.EDITED_MESSAGE & (filters.TEXT | filters.CAPTION), handle_whatsapp_report_edit
-    ), group=1)
-
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_pm_math
-    ), group=2)
-
-    application.add_handler(MessageHandler(
-        (filters.TEXT & ~filters.COMMAND) | filters.CAPTION, extract_and_save_data
-    ))
-
-    application.add_error_handler(error_handler)
-
-    application.run_polling(poll_interval=1.0, drop_pending_updates=True, timeout=30)
-
-
-if __name__ == '__main__':
-    keep_alive()
-    main()
-))
+    application.add_handler(CallbackQueryHandler(cleardata_callback, pattern=r'^cleardata_(confirm|cancel)$'))
     application.add_handler(CallbackQueryHandler(
         monthly_total_clear_callback,
-        pattern=r'^monthly_clear_(?:start|confirm_[A-Za-z0-9_-]{8,20}|cancel_[A-Za-z0-9_-]{8,20})    application.add_handler(CommandHandler("form", report_form_command))
-    application.add_handler(CommandHandler("stats", stats))
-    application.add_handler(CommandHandler("listusers", list_users))
-    application.add_handler(CommandHandler("listgroups", list_groups))
-    application.add_handler(
-        CommandHandler(
-            "allschedules", allschedules_command, filters=filters.ChatType.PRIVATE
-        )
-    )
-    application.add_handler(CommandHandler("listschedules", listschedules_command))
-    application.add_handler(CommandHandler("removeschedule", removeschedule_command))
-    application.add_handler(CommandHandler("admin", admin_command))
-    application.add_handler(CommandHandler("clearall", admin_clearall_command))
-    application.add_handler(CommandHandler("resetplusall", admin_resetplusall_command))
-    addbutton_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("addbutton", addbutton_command,
-                           filters=filters.ChatType.PRIVATE),
-        ],
-        states={
-            STARTBTN_AWAIT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND,
-                               addbutton_receive),
-            ],
-        },
-        fallbacks=[CommandHandler("cancel", addbutton_receive)],
-        allow_reentry=True,
-    )
-    application.add_handler(addbutton_handler)
-    application.add_handler(CommandHandler("removebutton", removebutton_command))
-    application.add_handler(CommandHandler("listbuttons", listbuttons_command))
-    application.add_handler(CallbackQueryHandler(removebutton_callback, pattern=r'^rmbtn_'))
-    application.add_handler(CommandHandler("guide", guide_command))
-    application.add_handler(CallbackQueryHandler(guide_callback, pattern=r'^guide_page_\d+$'))
-    application.add_handler(CommandHandler("deposit_total", deposit_total_command))
-    application.add_handler(CommandHandler("whatsapp_total", whatsapp_total_command))
-    application.add_handler(CommandHandler("total_plus", total_plus_command))
-    application.add_handler(CommandHandler("reset_plus", reset_plus_command))
-    application.add_handler(CallbackQueryHandler(resetplus_callback, pattern=r'^resetplus_(confirm|cancel)$'))
-    plus_reaction_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler(
-                "setplusreaction",
-                plus_reaction_start,
-                filters=filters.ChatType.PRIVATE,
-            ),
-        ],
-        states={
-            PLUS_REACTION_AWAIT: [
-                CommandHandler("reset", plus_reaction_receive),
-                CommandHandler("cancel", plus_reaction_cancel),
-                MessageHandler(filters.TEXT & ~filters.COMMAND, plus_reaction_receive),
-            ],
-        },
-        fallbacks=[
-            CommandHandler("cancel", plus_reaction_cancel),
-        ],
-        allow_reentry=True,
-        per_message=False,
-    )
-    application.add_handler(plus_reaction_handler)
-
-    application.add_handler(CallbackQueryHandler(clear_group_data_callback, pattern=r'^admin_clear_-?\d+$'))
-    application.add_handler(CallbackQueryHandler(cancel_group_action, pattern='^admin_cancel$'))
-    application.add_handler(CallbackQueryHandler(adminall_callback, pattern=r'^adminall_'))
-    bot_settings_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(bot_settings_menu, pattern='^adm_botsettings$')],
-        states={
-            BOT_SETTINGS_SELECT: [
-                CallbackQueryHandler(bot_settings_select, pattern='^admbs_(name|about|desc|photo)$'),
-                CallbackQueryHandler(bot_settings_cancel, pattern='^admbs_cancel$'),
-            ],
-            BOT_SETTINGS_AWAITING: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, bot_settings_apply),
-            ],
-            BOT_SETTINGS_PHOTO: [
-                MessageHandler(filters.PHOTO, bot_settings_photo_receive),
-            ],
-        },
-        fallbacks=[
-            CallbackQueryHandler(bot_settings_cancel, pattern='^admbs_cancel$'),
-            CommandHandler('cancel', cancel_conversation),
-        ],
-        allow_reentry=True, per_message=False,
-    )
-    application.add_handler(bot_settings_handler)
-
-    application.add_handler(CallbackQueryHandler(admin_panel_callback, pattern='^adm_'))
-
-
-
-
-
-    feedback_handler = ConversationHandler(
-        entry_points=[CommandHandler("feedback", start_feedback)],
-        states={FEEDBACK_AWAITING: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_feedback)]},
-        fallbacks=[CommandHandler('cancel', cancel_conversation)],
-        allow_reentry=True
-    )
-    application.add_handler(feedback_handler)
-
-    broadcast_handler = ConversationHandler(
-        entry_points=[CommandHandler("broadcast", broadcast_start, filters=filters.User(ADMIN_IDS))],
-        states={
-            BROADCAST_SELECT_CHAT: [CallbackQueryHandler(broadcast_select_chat, pattern='^bcast_id_')],
-            BROADCAST_AWAITING_MESSAGE: [MessageHandler(
-                (filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Document.ALL |
-                 filters.AUDIO | filters.ANIMATION | filters.VOICE | filters.VIDEO_NOTE |
-                 filters.Sticker.ALL) & ~filters.COMMAND,
-                broadcast_await_message
-            )],
-            BROADCAST_CONFIRMATION: [CallbackQueryHandler(broadcast_confirm, pattern='^bcast_confirm$')]
-        },
-        fallbacks=[
-            CallbackQueryHandler(broadcast_cancel, pattern='^bcast_cancel$'),
-            CommandHandler('cancel', cancel_conversation)
-        ],
-        allow_reentry=True
-    )
-    application.add_handler(broadcast_handler)
-
-
-    application.add_handler(MessageHandler(filters.REPLY & filters.Regex(r'^\+$'), handle_plus_reply))
-    application.add_handler(MessageHandler(filters.REPLY & filters.Regex(r'^\-$'), handle_minus_reply))
-    application.add_handler(MessageHandler(filters.REPLY & filters.Regex(r'^(打枪|သာချန်း)$'), handle_daqiang_reply))
-
-    # Green alert — fires independently in group=3 so deposit/whatsapp handlers are unaffected
-    application.add_handler(MessageHandler(
-        (filters.TEXT | filters.CAPTION) & ~filters.COMMAND & filters.ChatType.GROUPS,
-        handle_green_report,
-    ), group=3)
-
-    application.add_handler(MessageHandler(
-        (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_deposit_report
-    ), group=1)
-    application.add_handler(MessageHandler(
-        (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_whatsapp_report
-    ), group=1)
-    application.add_handler(MessageHandler(
-        filters.UpdateType.EDITED_MESSAGE & (filters.TEXT | filters.CAPTION), handle_deposit_report_edit
-    ), group=1)
-    application.add_handler(MessageHandler(
-        filters.UpdateType.EDITED_MESSAGE & (filters.TEXT | filters.CAPTION), handle_whatsapp_report_edit
-    ), group=1)
-
-    application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_pm_math
-    ), group=2)
-
-    application.add_handler(MessageHandler(
-        (filters.TEXT & ~filters.COMMAND) | filters.CAPTION, extract_and_save_data
-    ))
-
-    application.add_error_handler(error_handler)
-
-    application.run_polling(poll_interval=1.0, drop_pending_updates=True, timeout=30)
-
-
-if __name__ == '__main__':
-    keep_alive()
-    main()
-,
+        pattern=r"^monthly_clear_(?:start|confirm_[A-Za-z0-9_-]{8,20}|cancel_[A-Za-z0-9_-]{8,20})$",
     ))
     application.add_handler(CommandHandler("form", report_form_command))
     application.add_handler(CommandHandler("stats", stats))
