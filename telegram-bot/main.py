@@ -39,6 +39,8 @@ from monthly_total import (
     save_record as save_monthly_total_record,
     remove_record as remove_monthly_total_record,
     clear_active_records as clear_monthly_active_records,
+    get_all_summary as monthly_total_all_summary,
+    clear_all_records as clear_all_monthly_total_records,
     total_command as monthly_total_command_impl,
     clear_callback as monthly_total_clear_callback_impl,
 )
@@ -106,6 +108,7 @@ CUSTOM_MSG_LABELS = {
     # Customizable reply-keyboard buttons
     "showdata_button": "📊 Showdata — Reply Keyboard button",
     "monthly_total_button": "📊 Monthly Total — Group reply-keyboard button",
+    "monthly_all_clear_button": "🧹 Monthly All Clear Data — Admin PM Reply Keyboard button",
     "total_plus_button": "🔢 Total Plus — Reply Keyboard button",
     "clear_data_button": "🗑️ Clear Data — Reply Keyboard button",
     "reset_plus_button": "🔄 Reset Plus — Reply Keyboard button",
@@ -222,6 +225,7 @@ DEFAULT_MSGS: dict = {
     # Reply-keyboard labels (rendered as plain text if no custom emoji is configured)
     "showdata_button": "Showdata",
     "monthly_total_button": MONTHLY_TOTAL_BUTTON_TEXT,
+    "monthly_all_clear_button": "Monthly All Clear Data",
     "total_plus_button": "Total Plus",
     "clear_data_button": "Clear Data",
     "reset_plus_button": "Reset Plus",
@@ -446,6 +450,7 @@ _SCHEDULE_ACTION_BUTTON_KEYS = {
 _REPLY_KEYBOARD_BUTTON_KEYS = {
     "showdata_button",
     "monthly_total_button",
+    "monthly_all_clear_button",
     "total_plus_button",
     "clear_data_button",
     "reset_plus_button",
@@ -2821,8 +2826,12 @@ async def report_form_command(update: Update, context: CallbackContext) -> None:
     )
 
 
-def _main_reply_keyboard(bot_data: dict, include_schedule: bool = False) -> ReplyKeyboardMarkup:
-    """Build the persistent keyboard; schedule controls are group-only."""
+def _main_reply_keyboard(
+    bot_data: dict,
+    include_schedule: bool = False,
+    include_monthly_admin: bool = False,
+) -> ReplyKeyboardMarkup:
+    """Build the persistent keyboard with group and ADMIN-only PM controls."""
     rows = [
         [
             _schedule_keyboard_button(bot_data, "showdata_button", style="primary"),
@@ -2837,6 +2846,14 @@ def _main_reply_keyboard(bot_data: dict, include_schedule: bool = False) -> Repl
             _schedule_keyboard_button(bot_data, "reset_plus_all_button", style="success"),
         ],
     ]
+    if include_monthly_admin:
+        rows.append([
+            _schedule_keyboard_button(
+                bot_data,
+                "monthly_all_clear_button",
+                style="danger",
+            ),
+        ])
     if include_schedule:
         rows.append([
             _schedule_keyboard_button(
@@ -2875,16 +2892,26 @@ async def ensure_reply_keyboard(update: Update, context: CallbackContext) -> Non
     text = (message.text or "").strip()
     if re.match(r"^/(?:start|menu)(?:@\w+)?(?:\s|$)", text, re.IGNORECASE):
         return
-    if context.chat_data.get("reply_keyboard_version") == "group-schedule-monthly-v3":
+    if context.chat_data.get("reply_keyboard_version") == "group-schedule-monthly-admin-v4":
         return
 
     context.chat_data["reply_keyboard_sent"] = True
-    context.chat_data["reply_keyboard_version"] = "group-schedule-monthly-v3"
+    context.chat_data["reply_keyboard_version"] = "group-schedule-monthly-admin-v4"
     bot_data = context.application.bot_data
     include_schedule = update.effective_chat.type in {"group", "supergroup"}
+    user = update.effective_user
+    include_monthly_admin = (
+        update.effective_chat.type == "private"
+        and user is not None
+        and user.id in ADMIN_IDS
+    )
     await message.reply_text(
         "Menu",
-        reply_markup=_main_reply_keyboard(bot_data, include_schedule=include_schedule),
+        reply_markup=_main_reply_keyboard(
+            bot_data,
+            include_schedule=include_schedule,
+            include_monthly_admin=include_monthly_admin,
+        ),
     )
 
 
@@ -2893,10 +2920,20 @@ async def main_menu_command(
 ) -> None:
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
     context.chat_data["reply_keyboard_sent"] = True
-    context.chat_data["reply_keyboard_version"] = "group-schedule-monthly-v3"
+    context.chat_data["reply_keyboard_version"] = "group-schedule-monthly-admin-v4"
     bot_data = context.application.bot_data
     include_schedule = update.effective_chat.type in {"group", "supergroup"}
-    reply_markup = _main_reply_keyboard(bot_data, include_schedule=include_schedule)
+    user = update.effective_user
+    include_monthly_admin = (
+        update.effective_chat.type == "private"
+        and user is not None
+        and user.id in ADMIN_IDS
+    )
+    reply_markup = _main_reply_keyboard(
+        bot_data,
+        include_schedule=include_schedule,
+        include_monthly_admin=include_monthly_admin,
+    )
     if show_welcome:
         user_name = update.effective_user.full_name if update.effective_user else "User"
         bot_username = context.bot.username
@@ -2961,6 +2998,7 @@ async def main_menu_text_handler(update: Update, context: CallbackContext) -> No
     handlers = {
         "showdata_button": show_data,
         "monthly_total_button": monthly_total_command,
+        "monthly_all_clear_button": monthly_all_clear_start,
         "total_plus_button": total_plus_command,
         "clear_data_button": clear_data,
         "reset_plus_button": reset_plus_command,
