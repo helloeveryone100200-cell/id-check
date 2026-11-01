@@ -58,6 +58,62 @@ def save_record(db, chat_id, message_id, value):
         return None
 
 
+def backfill_active_records(db, data_msg_map):
+    """One-time import of still-active daily report-map entries into month totals.
+
+    A per-group marker makes this idempotent across restarts and prevents an
+    already-cleared month's old daily mappings from being re-added later.
+    """
+    if db is None or not data_msg_map:
+        return 0
+
+    grouped = {}
+    for map_key, record in list(data_msg_map.items()):
+        if not isinstance(map_key, tuple) or len(map_key) != 2 or not isinstance(record, dict):
+            continue
+        chat_id = str(record.get("chat_id") or map_key[0])
+        grouped.setdefault(chat_id, []).append((map_key[1], record))
+
+    migrated = 0
+    meta = db["monthly_total_meta"]
+    for chat_id, items in grouped.items():
+        try:
+            marker = meta.find_one({"_id": chat_id, "initial_backfill_done": True})
+        except Exception:
+            continue
+        if marker:
+            continue
+
+        failed = False
+        for reply_message_id, record in items:
+            if record.get("monthly_record_id"):
+                continue
+            fields = str(record.get("entry") or "").split("    ", 2)
+            if len(fields) < 2:
+                continue
+            label, key = normalize_khaifa(fields[1])
+            if label is None or key is None:
+                continue
+            record_id = save_record(db, chat_id, int(reply_message_id), label)
+            if record_id is None:
+                failed = True
+                continue
+            record["monthly_record_id"] = record_id
+            migrated += 1
+
+        if not failed:
+            try:
+                meta.update_one(
+                    {"_id": chat_id},
+                    {"$set": {"initial_backfill_done": True}},
+                    upsert=True,
+                )
+            except Exception:
+                # Re-running is safe because source message IDs are idempotent.
+                pass
+    return migrated
+
+
 def get_totals(db, chat_id):
     if db is None:
         return None
