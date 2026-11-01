@@ -6469,6 +6469,10 @@ def main():
         monthly_total_clear_callback,
         pattern=r"^monthly_clear_(?:start|confirm_[A-Za-z0-9_-]{8,20}|cancel_[A-Za-z0-9_-]{8,20})$",
     ))
+    application.add_handler(CallbackQueryHandler(
+        monthly_all_clear_callback,
+        pattern=r"^monthly_all_clear_(?:confirm|cancel)_[A-Za-z0-9_-]{8,20}$",
+    ))
     application.add_handler(CommandHandler("form", report_form_command))
     application.add_handler(CommandHandler("stats", stats))
     application.add_handler(CommandHandler("listusers", list_users))
