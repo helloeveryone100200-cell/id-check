@@ -96,6 +96,13 @@ class MonthlyTotalTests(unittest.TestCase):
             ],
         )
 
+    def test_emoji_presentation_selector_does_not_split_same_label(self):
+        mt.save_record(self.db, "-1001", 20, "清风️")
+        mt.save_record(self.db, "-1001", 21, "清风")
+        totals = mt.get_totals(self.db, "-1001")
+        self.assertEqual(len(totals), 1)
+        self.assertEqual(totals[0]["count"], 2)
+
     def test_minus_removes_only_the_linked_monthly_record(self):
         first = mt.save_record(self.db, "-1001", 10, "文泰")
         mt.save_record(self.db, "-1001", 11, "文泰")
