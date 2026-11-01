@@ -35,6 +35,11 @@ jobs:
       - name: Test Monthly Total Khaifa counting and deletion
         run: python -m unittest discover -s telegram-bot -p "test_monthly_total.py"
 
+      - name: Test ADMIN-only Monthly All Clear PM workflow
+        env:
+          BOT_TOKEN: "123456:TEST_TOKEN_FOR_MONTHLY_ADMIN_TEST"
+        run: python -m unittest discover -s telegram-bot -p "test_monthly_admin.py"
+
       - name: Smoke-test handler registration and group keyboards
         env:
           BOT_TOKEN: "123456:TEST_TOKEN_FOR_HANDLER_SMOKE_TEST"
