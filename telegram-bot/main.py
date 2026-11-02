@@ -108,6 +108,22 @@ CUSTOM_MSG_LABELS = {
     # Customizable reply-keyboard buttons
     "showdata_button": "📊 Showdata — Reply Keyboard button",
     "monthly_total_button": "📊 Monthly Total — Group reply-keyboard button",
+    "monthly_total_message": "📊 Monthly Total — Main report (Article; {totals}, {empty}, {warning})",
+    "monthly_total_row": "🧾 Monthly Total — Khaifa row format ({khaifa}, {count})",
+    "monthly_total_empty": "📭 Monthly Total — Empty-data text",
+    "monthly_total_warning": "⚠️ Monthly Total — Reminder / warning text",
+    "monthly_total_group_only": "🔒 Monthly Total — Group-only message",
+    "monthly_total_db_error": "❌ Monthly Total — Database read error",
+    "monthly_total_clear_button": "🗑️ Monthly Total — Clear inline button",
+    "monthly_total_admin_only": "🔒 Monthly Total — Group Admin permission alert",
+    "monthly_total_no_data": "📭 Monthly Total — No data alert",
+    "monthly_total_expired": "⌛ Monthly Total — Expired confirmation alert",
+    "monthly_total_confirm_prompt": "⚠️ Monthly Total — Clear confirmation prompt (Article; {group_name}, {count})",
+    "monthly_total_confirm_button": "✅ Monthly Total — Confirm inline button",
+    "monthly_total_cancel_button": "❌ Monthly Total — Cancel inline button",
+    "monthly_total_cancelled": "↩️ Monthly Total — Cancelled message",
+    "monthly_total_clear_failed": "❌ Monthly Total — Clear failure message",
+    "monthly_total_cleared": "✅ Monthly Total — Clear success message ({count})",
     "monthly_all_clear_button": "🧹 Monthly All Clear Data — Admin PM Reply Keyboard button",
     "total_plus_button": "🔢 Total Plus — Reply Keyboard button",
     "clear_data_button": "🗑️ Clear Data — Reply Keyboard button",
@@ -225,6 +241,22 @@ DEFAULT_MSGS: dict = {
     # Reply-keyboard labels (rendered as plain text if no custom emoji is configured)
     "showdata_button": "Showdata",
     "monthly_total_button": MONTHLY_TOTAL_BUTTON_TEXT,
+    "monthly_total_message": "📊 Monthly Total\n\n{totals}{empty}\n\n{warning}",
+    "monthly_total_row": "{khaifa}   -   {count}",
+    "monthly_total_empty": "ဤ Group တွင် Monthly Total အတွက် ရေတွက်ထားသော Khaifa data မရှိသေးပါ။",
+    "monthly_total_warning": "ဤ Monthly Total Data ကို လကုန်ရန် နောက်ဆုံးရက်တွင် အလုပ်မဆင်းခင်အချိန်တွင် Monthly Clear Data ကို နှိပ်ပါ။ မနှိပ်ပါက Bot အသုံးပြုခွင့်ကို ပိတ်ပါမည်။",
+    "monthly_total_group_only": "Monthly Total ကို Group Chat ထဲတွင်သာ အသုံးပြုနိုင်ပါသည်။",
+    "monthly_total_db_error": "❌ Monthly Total Data ကို Database မှ ဖတ်၍မရပါ။",
+    "monthly_total_clear_button": "Monthly Clear Data",
+    "monthly_total_admin_only": "🔒 Group Owner/Admin သာ Monthly Clear Data ကို အသုံးပြုနိုင်ပါသည်။",
+    "monthly_total_no_data": "Monthly Total data မရှိသေးပါ။",
+    "monthly_total_expired": "⌛ Confirmation သက်တမ်းကုန်သွားပါပြီ။",
+    "monthly_total_confirm_prompt": "⚠️ {group_name} ၏ Monthly Total Data ({count} records) အားလုံးကို Database မှ ရှင်းလင်းမည်။\n\nဆက်လုပ်မည်လား?",
+    "monthly_total_confirm_button": "✅ Confirm",
+    "monthly_total_cancel_button": "❌ Cancel",
+    "monthly_total_cancelled": "↩️ Monthly Clear Data ကို ပယ်ဖျက်လိုက်ပါပြီ။ Data များ မပြောင်းလဲပါ။",
+    "monthly_total_clear_failed": "❌ Database error — Monthly Data များကို မဖျက်နိုင်ပါ။",
+    "monthly_total_cleared": "✅ Monthly Total Data ရှင်းလင်းပြီးပါပြီ။\n🗑️ Record {count} ခု ဖျက်ပြီးပါပြီ။",
     "monthly_all_clear_button": "Monthly All Clear Data",
     "total_plus_button": "Total Plus",
     "clear_data_button": "Clear Data",
@@ -458,7 +490,16 @@ _REPLY_KEYBOARD_BUTTON_KEYS = {
     "reset_plus_all_button",
     "number_words_button",
 }
-_CUSTOM_KEYBOARD_BUTTON_KEYS = _SCHEDULE_ACTION_BUTTON_KEYS | _REPLY_KEYBOARD_BUTTON_KEYS
+_MONTHLY_TOTAL_INLINE_BUTTON_KEYS = {
+    "monthly_total_clear_button",
+    "monthly_total_confirm_button",
+    "monthly_total_cancel_button",
+}
+_CUSTOM_KEYBOARD_BUTTON_KEYS = (
+    _SCHEDULE_ACTION_BUTTON_KEYS
+    | _REPLY_KEYBOARD_BUTTON_KEYS
+    | _MONTHLY_TOTAL_INLINE_BUTTON_KEYS
+)
 
 
 def _schedule_keyboard_label(bot_data: dict, key: str) -> str:
@@ -934,6 +975,15 @@ _RICH_TEXT_ONLY_KEYS = (
         "total_plus_header",
         "total_plus_row",
         "total_plus_grand",
+        # Monthly Total row fragments and callback alerts cannot render Articles.
+        "monthly_total_row",
+        "monthly_total_empty",
+        "monthly_total_warning",
+        "monthly_total_group_only",
+        "monthly_total_db_error",
+        "monthly_total_admin_only",
+        "monthly_total_no_data",
+        "monthly_total_expired",
     }
 )
 
@@ -1608,6 +1658,19 @@ async def setmsg_select(update: Update, context: CallbackContext) -> int:
         "📄 လက်ရှိ message တွင် Telegram Article formatting ပါရှိသည်။\n"
         if stored.get("rich_message") else ""
     )
+    setting_note = ""
+    if key == "monthly_total_message":
+        setting_note = (
+            "🧩 အသုံးပြုနိုင်သော placeholders: {totals}, {empty}, {warning}\n"
+            "📄 Telegram Article ဖြင့်လည်း custom layout ဖန်တီးနိုင်ပါသည်။\n\n"
+        )
+    elif key == "monthly_total_row":
+        setting_note = "🧩 Placeholders: {khaifa}, {count}\n\n"
+    elif key == "monthly_total_confirm_prompt":
+        setting_note = (
+            "🧩 Placeholders: {group_name}, {count}\n"
+            "📄 Telegram Article ဖြင့်လည်း custom confirmation ဖန်တီးနိုင်ပါသည်။\n\n"
+        )
 
     if key in {"confirm_button", "cancel_button"}:
         await query.edit_message_text(
@@ -1648,6 +1711,7 @@ async def setmsg_select(update: Update, context: CallbackContext) -> int:
         )
         suffix = (
             "\n\n"
+            f"{setting_note}"
             "✏️ အသစ်ရိုက်ထည့်ပါ (Premium animated emoji ပါ တိုက်ရိုက်ထည့်နိုင်သည်)\n"
             "📄 Telegram ရှိ Attach → Article မှ ပို့လျှင် formatting, headings, lists, tables, formulas နှင့် media များကို သိမ်းနိုင်သည်။\n\n"
             "/reset — default ပြန်ထား\n"
@@ -1676,6 +1740,7 @@ async def setmsg_select(update: Update, context: CallbackContext) -> int:
         f"<b>လက်ရှိ message:</b>\n"
         f"<blockquote>{html_escape(current[:800])}</blockquote>\n\n"
         f"{article_note}"
+        f"{setting_note}"
         "✏️ အသစ်ရိုက်ထည့်ပါ (Premium animated emoji ပါ တိုက်ရိုက်ထည့်နိုင်သည်)\n"
         "📄 Telegram ရှိ Attach → Article မှ ပို့လျှင် formatting, headings, lists, tables, formulas နှင့် media များကို သိမ်းနိုင်သည်။\n\n"
         "<i>/reset — default ပြန်ထား</i>\n"
@@ -1722,6 +1787,18 @@ async def setmsg_receive(update: Update, context: CallbackContext) -> int:
     if not text.strip():
         await msg.reply_text(
             "❌ Plain text သို့မဟုတ် Telegram ရှိ Attach → Article မှပို့ထားသော Article ကို ပို့ပါ။"
+        )
+        return SETMSG_AWAIT
+
+    if key in {
+        "monthly_total_group_only",
+        "monthly_total_db_error",
+        "monthly_total_admin_only",
+        "monthly_total_no_data",
+        "monthly_total_expired",
+    } and len(text) > 200:
+        await msg.reply_text(
+            "❌ Telegram callback alert စာသားသည် 200 characters ထက် မကျော်ရပါ။"
         )
         return SETMSG_AWAIT
 
@@ -5809,14 +5886,55 @@ async def total_plus_command(update: Update, context: CallbackContext) -> None:
 
 
 async def monthly_total_command(update: Update, context: CallbackContext) -> None:
-    await monthly_total_command_impl(update, context, get_db=get_mongo_db)
+    bot_data = context.application.bot_data
+
+    async def send_custom(target, key, reply_markup=None, **fmt):
+        await _reply_custom(
+            target, bot_data, key, reply_markup=reply_markup, **fmt
+        )
+
+    def get_text(key, **fmt):
+        return get_msg(bot_data, key, **fmt)
+
+    def button_factory(key, callback_data, style):
+        return _schedule_keyboard_button(
+            bot_data, key, callback_data=callback_data, style=style
+        )
+
+    await monthly_total_command_impl(
+        update,
+        context,
+        get_db=get_mongo_db,
+        get_text=get_text,
+        send_custom=send_custom,
+        button_factory=button_factory,
+    )
 
 
 async def monthly_total_clear_callback(update: Update, context: CallbackContext) -> None:
+    bot_data = context.application.bot_data
+
+    async def edit_custom(query, key, reply_markup=None, **fmt):
+        await _edit_custom(
+            query, bot_data, key, reply_markup=reply_markup, **fmt
+        )
+
+    def get_text(key, **fmt):
+        return get_msg(bot_data, key, **fmt)
+
+    def button_factory(key, callback_data, style):
+        return _schedule_keyboard_button(
+            bot_data, key, callback_data=callback_data, style=style
+        )
+
     await monthly_total_clear_callback_impl(
-        update, context,
+        update,
+        context,
         get_db=get_mongo_db,
         is_group_admin=_is_group_schedule_admin,
+        get_text=get_text,
+        edit_custom=edit_custom,
+        button_factory=button_factory,
     )
 
 
