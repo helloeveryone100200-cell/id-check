@@ -345,7 +345,7 @@ DEFAULT_MSGS: dict = {
     # Scheduled admin notification
     "auto_clear": (
         "🤖 <b>Auto Clear ပြုလုပ်ပြီးပါပြီ</b>\n\n"
-        "⏰ နေ့လည် 12:00 (Yangon)\n"
+        "⏰ မနက် 07:00 (Yangon)\n"
         "🗑️ Shift: <b>{prev_key}</b> data ရှင်းပြီးပါပြီ\n"
         "📊 {cleared_count} group(s) cleared"
     ),
@@ -2764,6 +2764,9 @@ REPORT_TEMPLATE = (
 )
 
 
+DAILY_AUTO_CLEAR_HOUR = 7
+
+
 def get_yangon_tz() -> pytz.timezone:
     return pytz.timezone('Asia/Yangon')
 
@@ -2775,7 +2778,7 @@ def get_data_key() -> str:
     except Exception:
         now = datetime.now()
 
-    cut_off_time = time(hour=12, minute=0, second=0)
+    cut_off_time = time(hour=DAILY_AUTO_CLEAR_HOUR, minute=0, second=0)
 
     if now.time() < cut_off_time:
         work_day = now.date() - timedelta(days=1)
@@ -6369,7 +6372,7 @@ async def monthly_total_auto_clear_job(context: CallbackContext) -> None:
 
 
 # ============================================================
-# AUTO CLEAR JOB (runs daily at 12:00 PM Yangon time)
+# AUTO CLEAR JOB (runs daily at 07:00 AM Yangon time)
 # ============================================================
 
 async def auto_clear_job(context: CallbackContext) -> None:
@@ -6443,7 +6446,7 @@ async def post_init(application: Application) -> None:
     tz = get_yangon_tz()
     application.job_queue.run_daily(
         auto_clear_job,
-        time=time(hour=12, minute=0, second=0, tzinfo=tz),
+        time=time(hour=DAILY_AUTO_CLEAR_HOUR, minute=0, second=0, tzinfo=tz),
         name='auto_clear_daily'
     )
     application.job_queue.run_daily(
