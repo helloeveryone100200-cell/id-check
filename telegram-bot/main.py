@@ -41,6 +41,7 @@ from monthly_total import (
     clear_active_records as clear_monthly_active_records,
     get_all_summary as monthly_total_all_summary,
     clear_all_records as clear_all_monthly_total_records,
+    clear_all_records_for_month as auto_clear_all_monthly_total_records,
     total_command as monthly_total_command_impl,
     clear_callback as monthly_total_clear_callback_impl,
 )
@@ -124,6 +125,8 @@ CUSTOM_MSG_LABELS = {
     "monthly_total_cancelled": "↩️ Monthly Total — Cancelled message",
     "monthly_total_clear_failed": "❌ Monthly Total — Clear failure message",
     "monthly_total_cleared": "✅ Monthly Total — Clear success message ({count})",
+    "monthly_total_auto_clear": "🗓️ Monthly Total — Monthly auto-clear success (Article; {month}, {groups}, {submissions}, {cleared_at})",
+    "monthly_total_auto_clear_failed": "⚠️ Monthly Total — Monthly auto-clear failure notice ({month})",
     "monthly_all_clear_button": "🧹 Monthly All Clear Data — Admin PM Reply Keyboard button",
     "total_plus_button": "🔢 Total Plus — Reply Keyboard button",
     "clear_data_button": "🗑️ Clear Data — Reply Keyboard button",
@@ -257,6 +260,19 @@ DEFAULT_MSGS: dict = {
     "monthly_total_cancelled": "↩️ Monthly Clear Data ကို ပယ်ဖျက်လိုက်ပါပြီ။ Data များ မပြောင်းလဲပါ။",
     "monthly_total_clear_failed": "❌ Database error — Monthly Data များကို မဖျက်နိုင်ပါ။",
     "monthly_total_cleared": "✅ Monthly Total Data ရှင်းလင်းပြီးပါပြီ။\n🗑️ Record {count} ခု ဖျက်ပြီးပါပြီ။",
+    "monthly_total_auto_clear": (
+        "✅ Monthly Total Auto Clear ပြီးပါပြီ။\n\n"
+        "📅 ရှင်းလင်းထားသော လ: {month}\n"
+        "👥 Group: {groups} ခု\n"
+        "📊 Monthly records: {submissions} ခု\n"
+        "⏰ Yangon Time: {cleared_at}\n\n"
+        "Group အားလုံး၏ Monthly Total Data ကို Database မှ ရှင်းလင်းပြီးပါပြီ။"
+    ),
+    "monthly_total_auto_clear_failed": (
+        "❌ Monthly Total Auto Clear မအောင်မြင်ပါ။\n\n"
+        "ရှင်းလင်းရမည့် လ: {month}\n"
+        "Database connection / operation ကို စစ်ဆေးပေးပါ။"
+    ),
     "monthly_all_clear_button": "Monthly All Clear Data",
     "total_plus_button": "Total Plus",
     "clear_data_button": "Clear Data",
@@ -6271,6 +6287,88 @@ async def guide_callback(update: Update, context: CallbackContext) -> None:
 
 
 # ============================================================
+# MONTHLY TOTAL AUTO CLEAR (1st day, 07:00 AM Yangon time)
+# ============================================================
+
+async def _run_monthly_total_auto_clear(
+    application: Application, now: datetime | None = None
+) -> None:
+    """Clear every group's previous-month totals once and notify all admins."""
+    tz = get_yangon_tz()
+    current = now or datetime.now(tz)
+    if current.tzinfo is None:
+        current = tz.localize(current)
+
+    # The job is registered daily so startup/restart behaviour is simple;
+    # actual deletion is strictly restricted to the first day of each month.
+    if current.day != 1:
+        return
+
+    month_key = current.strftime("%Y-%m")
+    previous_month = (current.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    result = auto_clear_all_monthly_total_records(get_mongo_db(), month_key)
+
+    if result is None:
+        logging.error(
+            "Monthly Total auto-clear failed for %s: database operation failed",
+            month_key,
+        )
+        for admin_id in ADMIN_IDS:
+            try:
+                await _send_custom(
+                    application.bot,
+                    admin_id,
+                    application.bot_data,
+                    "monthly_total_auto_clear_failed",
+                    month=previous_month,
+                )
+            except Exception as exc:
+                logging.warning(
+                    "Monthly Total auto-clear failure notification to admin %s failed: %s",
+                    admin_id,
+                    exc,
+                )
+        return
+
+    if result.get("already_cleared"):
+        logging.info(
+            "Monthly Total auto-clear for %s was already completed; skipping duplicate run",
+            month_key,
+        )
+        return
+
+    cleared_at = current.strftime("%Y-%m-%d %H:%M")
+    logging.info(
+        "Monthly Total auto-clear completed for %s: %s groups, %s records",
+        previous_month,
+        result.get("groups", 0),
+        result.get("submissions", 0),
+    )
+    for admin_id in ADMIN_IDS:
+        try:
+            await _send_custom(
+                application.bot,
+                admin_id,
+                application.bot_data,
+                "monthly_total_auto_clear",
+                month=previous_month,
+                groups=result.get("groups", 0),
+                submissions=result.get("submissions", 0),
+                cleared_at=cleared_at,
+            )
+        except Exception as exc:
+            logging.warning(
+                "Monthly Total auto-clear notification to admin %s failed: %s",
+                admin_id,
+                exc,
+            )
+
+
+async def monthly_total_auto_clear_job(context: CallbackContext) -> None:
+    await _run_monthly_total_auto_clear(context.application)
+
+
+# ============================================================
 # AUTO CLEAR JOB (runs daily at 12:00 PM Yangon time)
 # ============================================================
 
@@ -6348,6 +6446,15 @@ async def post_init(application: Application) -> None:
         time=time(hour=12, minute=0, second=0, tzinfo=tz),
         name='auto_clear_daily'
     )
+    application.job_queue.run_daily(
+        monthly_total_auto_clear_job,
+        time=time(hour=7, minute=0, second=0, tzinfo=tz),
+        name='monthly_total_auto_clear_daily'
+    )
+    # Catch up when the service starts/restarts after 07:00 on the first day.
+    startup_now = datetime.now(tz)
+    if startup_now.day == 1 and (startup_now.hour, startup_now.minute) >= (7, 0):
+        await _run_monthly_total_auto_clear(application, startup_now)
     public_commands = _public_bot_commands()
     admin_commands = _admin_bot_commands()
 

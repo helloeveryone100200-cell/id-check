@@ -503,6 +503,31 @@ class MonthlyTotalTests(unittest.TestCase):
 
         asyncio.run(scenario())
 
+    def test_monthly_auto_clear_runs_once_per_month(self):
+        mt.save_record(self.db, "-1001", 10, "文泰")
+        mt.save_record(self.db, "-1001", 11, "文泰")
+        mt.save_record(self.db, "-1002", 12, "清风️")
+
+        first = mt.clear_all_records_for_month(self.db, "2026-11")
+        self.assertEqual(first["groups"], 2)
+        self.assertEqual(first["submissions"], 3)
+        self.assertFalse(first["already_cleared"])
+        self.assertEqual(mt.get_totals(self.db, "-1001"), [])
+        self.assertEqual(mt.get_totals(self.db, "-1002"), [])
+
+        # New-month submissions made after the scheduled clear must remain.
+        mt.save_record(self.db, "-1001", 13, "新月")
+        second = mt.clear_all_records_for_month(self.db, "2026-11")
+        self.assertTrue(second["already_cleared"])
+        self.assertEqual(
+            mt.get_totals(self.db, "-1001"),
+            [{"khaifa": "新月", "count": 1}],
+        )
+
+    def test_monthly_auto_clear_rejects_invalid_month_key(self):
+        self.assertIsNone(mt.clear_all_records_for_month(self.db, "2026-13"))
+        self.assertIsNone(mt.clear_all_records_for_month(self.db, "not-a-month"))
+
     def test_global_clear_counts_and_removes_all_group_monthly_data_only(self):
         mt.save_record(self.db, "-1001", 10, "文泰")
         mt.save_record(self.db, "-1001", 11, "文泰")
