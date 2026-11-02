@@ -14,6 +14,7 @@ from datetime import datetime
 COLLECTION = "monthly_total_counts"
 LEGACY_COLLECTION = "monthly_total_entries"
 META_COLLECTION = "monthly_total_meta"
+AUTO_CLEAR_RUNS_COLLECTION = "monthly_total_auto_clear_runs"
 STORAGE_VERSION = 2
 BUTTON_TEXT = "Monthly Total"
 CLEAR_TTL_SECONDS = 600
@@ -356,6 +357,60 @@ def clear_all_records(db):
         # Remove any unmigrated legacy records too; never touch monthly_total_meta.
         db[LEGACY_COLLECTION].delete_many({})
         return summary
+    except Exception:
+        return None
+
+
+
+def clear_all_records_for_month(db, month_key):
+    """Clear every group's Monthly Total once for a YYYY-MM month key.
+
+    The run marker is separate from migration metadata, so preserving old
+    backfill guards remains unchanged. A completed marker prevents duplicate
+    clears after restarts or repeated scheduler callbacks.
+    """
+    if db is None:
+        return None
+
+    month_key = str(month_key or "")
+    if not re.fullmatch(r"\d{4}-\d{2}", month_key):
+        return None
+
+    try:
+        with _write_lock:
+            runs = db[AUTO_CLEAR_RUNS_COLLECTION]
+            previous = runs.find_one({"_id": month_key})
+            if previous and previous.get("status") == "completed":
+                summary = previous.get("summary") or {
+                    "groups": 0,
+                    "submissions": 0,
+                    "counter_documents": 0,
+                    "legacy_documents": 0,
+                }
+                return {**summary, "already_cleared": True}
+
+            summary = get_all_summary(db)
+            if summary is None:
+                return None
+
+            # Mark as running before deletion. If the process stops mid-clear,
+            # the next invocation retries instead of treating it as complete.
+            runs.update_one(
+                {"_id": month_key},
+                {"$set": {"status": "running", "summary": summary}},
+                upsert=True,
+            )
+
+            cleared = clear_all_records(db)
+            if cleared is None:
+                return None
+
+            runs.update_one(
+                {"_id": month_key},
+                {"$set": {"status": "completed", "summary": cleared}},
+                upsert=True,
+            )
+            return {**cleared, "already_cleared": False}
     except Exception:
         return None
 
