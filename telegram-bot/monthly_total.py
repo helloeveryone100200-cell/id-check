@@ -373,7 +373,7 @@ def clear_all_records_for_month(db, month_key):
         return None
 
     month_key = str(month_key or "")
-    if not re.fullmatch(r"\d{4}-\d{2}", month_key):
+    if not re.fullmatch(r"\d{4}-(?:0[1-9]|1[0-2])", month_key):
         return None
 
     try:
