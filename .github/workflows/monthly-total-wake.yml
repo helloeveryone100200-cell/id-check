@@ -1,0 +1,39 @@
+name: Wake Render for Monthly Total Auto Clear
+
+on:
+  # 00:25 UTC = 06:55 Asia/Yangon. This wakes a sleeping Free service
+  # shortly before its in-process 07:00 Yangon monthly clear job.
+  schedule:
+    - cron: "25 0 1 * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: monthly-total-auto-clear-wake
+  cancel-in-progress: false
+
+jobs:
+  wake-render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: Wake Render and verify the health endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://telegram-gemini-bot-c9f3.onrender.com/health"
+
+          for attempt in $(seq 1 12); do
+            response="$(curl --silent --show-error --fail --max-time 15 "$url" 2>/dev/null || true)"
+            if grep -Eq '"status"[[:space:]]*:[[:space:]]*"ok"' <<<"$response"; then
+              echo "Render health endpoint is responding."
+              exit 0
+            fi
+
+            echo "Render is still starting (attempt $attempt/12)."
+            sleep 10
+          done
+
+          echo "Render did not become healthy within the retry window."
+          exit 1
