@@ -360,99 +360,306 @@ def clear_all_records(db):
         return None
 
 
-async def total_command(update, context, *, get_db):
+def _render_custom_text(get_text, key, fallback, **fmt):
+    """Resolve a /setmsg value with safe placeholder substitution."""
+    if get_text is not None:
+        try:
+            return str(get_text(key, **fmt))
+        except Exception:
+            pass
+
+    raw = str(fallback or "")
+    if not fmt:
+        return raw
+
+    return re.sub(
+        r"\{(\w+)\}",
+        lambda match: str(fmt[match.group(1)])
+        if match.group(1) in fmt else match.group(0),
+        raw,
+    )
+
+
+async def _send_custom_message(
+    target, key, fallback, *, send_custom=None, get_text=None,
+    reply_markup=None, **fmt
+):
+    if send_custom is not None:
+        await send_custom(
+            target, key, reply_markup=reply_markup, **fmt
+        )
+        return
+    await target.reply_text(
+        _render_custom_text(get_text, key, fallback, **fmt),
+        reply_markup=reply_markup,
+    )
+
+
+async def _edit_custom_message(
+    query, key, fallback, *, edit_custom=None, get_text=None,
+    reply_markup=None, **fmt
+):
+    if edit_custom is not None:
+        await edit_custom(
+            query, key, reply_markup=reply_markup, **fmt
+        )
+        return
+    await query.edit_message_text(
+        _render_custom_text(get_text, key, fallback, **fmt),
+        reply_markup=reply_markup,
+    )
+
+
+def _monthly_button(
+    button_factory, key, fallback_label, callback_data, style
+):
+    if button_factory is not None:
+        return button_factory(key, callback_data, style)
+    return __import__("telegram").InlineKeyboardButton(
+        fallback_label,
+        callback_data=callback_data,
+        style=style,
+    )
+
+
+async def total_command(
+    update, context, *, get_db, get_text=None, send_custom=None,
+    button_factory=None
+):
     message, chat = update.effective_message, update.effective_chat
     if message is None or chat is None:
         return
     if chat.type not in {"group", "supergroup"}:
-        await message.reply_text("Monthly Total ကို Group Chat ထဲတွင်သာ အသုံးပြုနိုင်ပါသည်။")
+        await _send_custom_message(
+            message,
+            "monthly_total_group_only",
+            "Monthly Total ကို Group Chat ထဲတွင်သာ အသုံးပြုနိုင်ပါသည်။",
+            send_custom=send_custom,
+            get_text=get_text,
+        )
         return
+
     totals = get_totals(get_db(), chat.id)
     if totals is None:
-        await message.reply_text("❌ Monthly Total Data ကို Database မှ ဖတ်၍မရပါ။")
+        await _send_custom_message(
+            message,
+            "monthly_total_db_error",
+            "❌ Monthly Total Data ကို Database မှ ဖတ်၍မရပါ။",
+            send_custom=send_custom,
+            get_text=get_text,
+        )
         return
-    lines = ["📊 Monthly Total"]
-    if totals:
-        lines.extend(f"{x['khaifa']}   -   {x['count']}" for x in totals)
-    else:
-        lines.append(EMPTY)
-    lines.extend(["", WARNING])
-    button = __import__("telegram").InlineKeyboardButton(
-        "Monthly Clear Data", callback_data="monthly_clear_start", style="danger"
+
+    rows = [
+        _render_custom_text(
+            get_text,
+            "monthly_total_row",
+            "{khaifa}   -   {count}",
+            khaifa=item["khaifa"],
+            count=item["count"],
+        )
+        for item in totals
+    ]
+    empty = ""
+    if not rows:
+        empty = _render_custom_text(
+            get_text,
+            "monthly_total_empty",
+            EMPTY,
+        )
+    warning = _render_custom_text(
+        get_text,
+        "monthly_total_warning",
+        WARNING,
     )
-    await message.reply_text(
-        "\n".join(lines),
-        reply_markup=__import__("telegram").InlineKeyboardMarkup([[button]]),
+
+    button = _monthly_button(
+        button_factory,
+        "monthly_total_clear_button",
+        "Monthly Clear Data",
+        "monthly_clear_start",
+        "danger",
+    )
+    from telegram import InlineKeyboardMarkup
+    await _send_custom_message(
+        message,
+        "monthly_total_message",
+        "📊 Monthly Total\n\n{totals}{empty}\n\n{warning}",
+        send_custom=send_custom,
+        get_text=get_text,
+        reply_markup=InlineKeyboardMarkup([[button]]),
+        totals="\n".join(rows),
+        empty=empty,
+        warning=warning,
     )
 
 
-async def clear_callback(update, context, *, get_db, is_group_admin):
+async def clear_callback(
+    update, context, *, get_db, is_group_admin, get_text=None,
+    edit_custom=None, button_factory=None
+):
     query = update.callback_query
     if query is None or query.message is None:
         if query:
             await query.answer()
         return
     chat, user = query.message.chat, query.from_user
+
+    def _alert(key, fallback):
+        return _render_custom_text(get_text, key, fallback)
+
     if chat.type not in {"group", "supergroup"} or user is None:
-        await query.answer("Group ထဲတွင်သာ အသုံးပြုနိုင်ပါသည်။", show_alert=True)
+        await query.answer(
+            _alert(
+                "monthly_total_group_only",
+                "Group ထဲတွင်သာ အသုံးပြုနိုင်ပါသည်။",
+            ),
+            show_alert=True,
+        )
         return
+
     chat_id, data = int(chat.id), query.data or ""
 
     if data == "monthly_clear_start":
         if not await is_group_admin(context, user.id, chat_id):
-            await query.answer("🔒 Group Owner/Admin သာ Monthly Clear Data ကို အသုံးပြုနိုင်ပါသည်။", show_alert=True)
+            await query.answer(
+                _alert(
+                    "monthly_total_admin_only",
+                    "🔒 Group Owner/Admin သာ Monthly Clear Data ကို အသုံးပြုနိုင်ပါသည်။",
+                ),
+                show_alert=True,
+            )
             return
         totals = get_totals(get_db(), chat_id)
         if totals is None:
-            await query.answer("❌ Database မှ ဖတ်၍မရပါ။", show_alert=True)
+            await query.answer(
+                _alert(
+                    "monthly_total_db_error",
+                    "❌ Database မှ ဖတ်၍မရပါ။",
+                ),
+                show_alert=True,
+            )
             return
         if not totals:
-            await query.answer("Monthly Total data မရှိသေးပါ။", show_alert=True)
+            await query.answer(
+                _alert(
+                    "monthly_total_no_data",
+                    "Monthly Total data မရှိသေးပါ။",
+                ),
+                show_alert=True,
+            )
             return
+
         token = secrets.token_urlsafe(6)
         context.chat_data["monthly_clear_pending"] = {
-            "token": token, "user_id": int(user.id), "created_at": datetime.now().timestamp()
+            "token": token,
+            "user_id": int(user.id),
+            "created_at": datetime.now().timestamp(),
         }
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("Confirm", callback_data=f"monthly_clear_confirm_{token}", style="success"),
-            InlineKeyboardButton("Cancel", callback_data=f"monthly_clear_cancel_{token}", style="danger"),
-        ]])
+        from telegram import InlineKeyboardMarkup
+        confirm = _monthly_button(
+            button_factory,
+            "monthly_total_confirm_button",
+            "Confirm",
+            f"monthly_clear_confirm_{token}",
+            "success",
+        )
+        cancel = _monthly_button(
+            button_factory,
+            "monthly_total_cancel_button",
+            "Cancel",
+            f"monthly_clear_cancel_{token}",
+            "danger",
+        )
+        keyboard = InlineKeyboardMarkup([[confirm, cancel]])
+        count = sum(int(item.get("count", 0)) for item in totals)
         await query.answer()
-        await query.edit_message_text(
+        await _edit_custom_message(
+            query,
+            "monthly_total_confirm_prompt",
             "⚠️ ဤ Group ၏ Monthly Total Data အားလုံးကို Database မှ ရှင်းလင်းမည်။\n\nဆက်လုပ်မည်လား?",
+            edit_custom=edit_custom,
+            get_text=get_text,
             reply_markup=keyboard,
+            group_name=getattr(chat, "title", None) or str(chat_id),
+            count=count,
         )
         return
 
-    match = re.fullmatch(r"monthly_clear_(confirm|cancel)_([A-Za-z0-9_-]{8,20})", data)
+    match = re.fullmatch(
+        r"monthly_clear_(confirm|cancel)_([A-Za-z0-9_-]{8,20})",
+        data,
+    )
     if not match:
         await query.answer()
         return
+
     action, token = match.groups()
     pending = context.chat_data.get("monthly_clear_pending") or {}
     created = pending.get("created_at")
-    expired = not isinstance(created, (int, float)) or datetime.now().timestamp() - created > CLEAR_TTL_SECONDS
-    if expired or pending.get("token") != token or int(pending.get("user_id", 0)) != int(user.id):
+    expired = (
+        not isinstance(created, (int, float))
+        or datetime.now().timestamp() - created > CLEAR_TTL_SECONDS
+    )
+    if (
+        expired
+        or pending.get("token") != token
+        or int(pending.get("user_id", 0)) != int(user.id)
+    ):
         context.chat_data.pop("monthly_clear_pending", None)
-        await query.answer("⌛ Confirmation သက်တမ်းကုန်သွားပါပြီ။", show_alert=True)
+        await query.answer(
+            _alert(
+                "monthly_total_expired",
+                "⌛ Confirmation သက်တမ်းကုန်သွားပါပြီ။",
+            ),
+            show_alert=True,
+        )
         return
+
     if not await is_group_admin(context, user.id, chat_id):
-        await query.answer("🔒 Group Owner/Admin သာ အသုံးပြုနိုင်ပါသည်။", show_alert=True)
+        await query.answer(
+            _alert(
+                "monthly_total_admin_only",
+                "🔒 Group Owner/Admin သာ အသုံးပြုနိုင်ပါသည်။",
+            ),
+            show_alert=True,
+        )
         return
+
     if action == "cancel":
         context.chat_data.pop("monthly_clear_pending", None)
         await query.answer()
-        await query.edit_message_text("↩️ Monthly Clear Data ကို ပယ်ဖျက်လိုက်ပါပြီ။ Data များ မပြောင်းလဲပါ။")
+        await _edit_custom_message(
+            query,
+            "monthly_total_cancelled",
+            "↩️ Monthly Clear Data ကို ပယ်ဖျက်လိုက်ပါပြီ။ Data များ မပြောင်းလဲပါ။",
+            edit_custom=edit_custom,
+            get_text=get_text,
+        )
         return
+
     count = clear_records(get_db(), chat_id)
     if count is None:
         context.chat_data.pop("monthly_clear_pending", None)
         await query.answer()
-        await query.edit_message_text("❌ Database error — Monthly Data များကို မဖျက်နိုင်ပါ။")
+        await _edit_custom_message(
+            query,
+            "monthly_total_clear_failed",
+            "❌ Database error — Monthly Data များကို မဖျက်နိုင်ပါ။",
+            edit_custom=edit_custom,
+            get_text=get_text,
+        )
         return
+
     context.chat_data.pop("monthly_clear_pending", None)
     if context.application.persistence:
         await context.application.persistence.flush()
     await query.answer()
-    await query.edit_message_text(f"✅ Monthly Total Data ရှင်းလင်းပြီးပါပြီ။\n🗑️ Record {count} ခု ဖျက်ပြီးပါပြီ။")
+    await _edit_custom_message(
+        query,
+        "monthly_total_cleared",
+        "✅ Monthly Total Data ရှင်းလင်းပြီးပါပြီ။\n🗑️ Record {count} ခု ဖျက်ပြီးပါပြီ။",
+        edit_custom=edit_custom,
+        get_text=get_text,
+        count=count,
+    )

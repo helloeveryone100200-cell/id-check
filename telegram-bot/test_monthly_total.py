@@ -341,6 +341,168 @@ class MonthlyTotalTests(unittest.TestCase):
         self.assertEqual(mt.get_totals(self.db, "-1001"), [])
 
 
+    def test_total_command_uses_custom_report_row_and_inline_button(self):
+        import asyncio
+
+        from telegram import InlineKeyboardButton
+
+        class Chat:
+            id = -1001
+            type = "supergroup"
+
+        class Message:
+            def __init__(self):
+                self.sent = None
+
+            async def reply_text(self, text, reply_markup=None):
+                self.sent = {"text": text, "reply_markup": reply_markup}
+
+        class Update:
+            effective_chat = Chat()
+
+            def __init__(self):
+                self.effective_message = Message()
+
+        class Context:
+            pass
+
+        async def scenario():
+            mt.save_record(self.db, "-1001", 501, "文泰")
+            update = Update()
+            context = Context()
+            captured = {}
+
+            async def send_custom(target, key, reply_markup=None, **fmt):
+                captured.update({
+                    "target": target,
+                    "key": key,
+                    "reply_markup": reply_markup,
+                    "fmt": fmt,
+                })
+
+            def get_text(key, **fmt):
+                templates = {
+                    "monthly_total_row": "{khaifa} :: {count}",
+                    "monthly_total_warning": "custom warning",
+                    "monthly_total_empty": "custom empty",
+                }
+                template = templates.get(key, key)
+                return template.format(**fmt) if fmt else template
+
+            await mt.total_command(
+                update,
+                context,
+                get_db=lambda: self.db,
+                get_text=get_text,
+                send_custom=send_custom,
+            )
+            self.assertEqual(captured["key"], "monthly_total_message")
+            self.assertEqual(captured["fmt"]["totals"], "文泰 :: 1")
+            self.assertEqual(captured["fmt"]["empty"], "")
+            self.assertEqual(captured["fmt"]["warning"], "custom warning")
+            button = captured["reply_markup"].inline_keyboard[0][0]
+            self.assertIsInstance(button, InlineKeyboardButton)
+            self.assertEqual(button.text, "Monthly Clear Data")
+            self.assertEqual(button.callback_data, "monthly_clear_start")
+
+        asyncio.run(scenario())
+
+    def test_monthly_clear_confirmation_uses_custom_prompt_and_button_keys(self):
+        import asyncio
+
+        from telegram import InlineKeyboardButton
+
+        class Chat:
+            id = -1001
+            type = "supergroup"
+            title = "Sample Group"
+
+        class User:
+            id = 12345
+
+        class Message:
+            chat = Chat()
+
+        class Query:
+            data = "monthly_clear_start"
+            message = Message()
+            from_user = User()
+
+            def __init__(self):
+                self.answered = False
+
+            async def answer(self, *args, **kwargs):
+                self.answered = True
+
+        class Update:
+            callback_query = Query()
+
+        class Persistence:
+            pass
+
+        class Application:
+            persistence = None
+
+        class Context:
+            chat_data = {}
+            application = Application()
+
+        async def scenario():
+            mt.save_record(self.db, "-1001", 601, "文泰")
+            mt.save_record(self.db, "-1001", 602, "文泰")
+            update = Update()
+            context = Context()
+            captured = {}
+            button_keys = []
+
+            async def is_group_admin(_context, _user_id, _chat_id):
+                return True
+
+            async def edit_custom(query, key, reply_markup=None, **fmt):
+                captured.update({
+                    "key": key,
+                    "reply_markup": reply_markup,
+                    "fmt": fmt,
+                })
+
+            def get_text(key, **fmt):
+                return key
+
+            def button_factory(key, callback_data, style):
+                button_keys.append((key, callback_data, style))
+                return InlineKeyboardButton(
+                    key,
+                    callback_data=callback_data,
+                    style=style,
+                )
+
+            await mt.clear_callback(
+                update,
+                context,
+                get_db=lambda: self.db,
+                is_group_admin=is_group_admin,
+                get_text=get_text,
+                edit_custom=edit_custom,
+                button_factory=button_factory,
+            )
+            self.assertTrue(update.callback_query.answered)
+            self.assertEqual(captured["key"], "monthly_total_confirm_prompt")
+            self.assertEqual(captured["fmt"]["group_name"], "Sample Group")
+            self.assertEqual(captured["fmt"]["count"], 2)
+            self.assertEqual(
+                [item[0] for item in button_keys],
+                [
+                    "monthly_total_confirm_button",
+                    "monthly_total_cancel_button",
+                ],
+            )
+            buttons = captured["reply_markup"].inline_keyboard[0]
+            self.assertTrue(all(isinstance(button, InlineKeyboardButton) for button in buttons))
+            self.assertTrue(buttons[0].callback_data.startswith("monthly_clear_confirm_"))
+            self.assertTrue(buttons[1].callback_data.startswith("monthly_clear_cancel_"))
+
+        asyncio.run(scenario())
+
     def test_global_clear_counts_and_removes_all_group_monthly_data_only(self):
         mt.save_record(self.db, "-1001", 10, "文泰")
         mt.save_record(self.db, "-1001", 11, "文泰")
