@@ -3466,9 +3466,10 @@ async def clear_data(update: Update, context: CallbackContext) -> None:
         and chat_id in context.application.bot_data['group_data']
         and today_key in context.application.bot_data['group_data'][chat_id]
     )
-    # Deposit Report is intentionally independent: manual Clear Data must
-    # neither inspect nor delete its records.
-    if not (mg_entries or pickle_has):
+    deposit_entries = _get_phone_id_report_entries(
+        context.application.bot_data, chat_id, today_key
+    )
+    if not (mg_entries or pickle_has or deposit_entries):
         await _reply_custom(message, context.application.bot_data,
                             "cleardata_empty", today=today_key)
         return
@@ -3508,7 +3509,10 @@ async def cleardata_callback(update: Update, context: CallbackContext) -> None:
 
     # Delete only after the user explicitly confirms.
     mg_delete_group_data(chat_id, today_key)
-    # Deposit Report is retained until the scheduled daily auto-clear.
+    # Clear this group's Deposit Report for the same reporting day.
+    _delete_phone_id_report_entries(
+        context.application.bot_data, chat_id, today_key
+    )
     group_data = context.application.bot_data.get('group_data', {})
     if chat_id in group_data and today_key in group_data[chat_id]:
         del group_data[chat_id][today_key]
@@ -3558,7 +3562,21 @@ async def admin_clearall_command(update: Update, context: CallbackContext) -> No
         except Exception:
             pass
     pickle_count = sum(1 for d in group_data.values() if today_key in d)
-    total_count = max(mg_count, pickle_count)
+    deposit_pickle_count = sum(
+        1 for days in context.application.bot_data.get("phone_id_reports", {}).values()
+        if days.get(today_key)
+    )
+    deposit_mongo_count = 0
+    if db is not None:
+        try:
+            deposit_mongo_count = db["phone_id_reports"].count_documents(
+                {"date_key": today_key}
+            )
+        except Exception as e:
+            logging.warning("MongoDB admin clear count error: %s", e)
+    total_count = max(mg_count, pickle_count) + max(
+        deposit_mongo_count, deposit_pickle_count
+    )
     has_data = total_count > 0
 
     if not has_data:
@@ -3649,8 +3667,10 @@ async def adminall_callback(update: Update, context: CallbackContext) -> None:
                 cleared_groups = result.deleted_count
             except Exception as e:
                 logging.warning(f"MongoDB adminall clear error: {e}")
-        # Deposit Report is deliberately excluded from all manual clear actions.
-        # It is removed only by auto_clear_job at the daily Yangon cutoff.
+        # Clear the independent Deposit Report collection for this reporting day.
+        _delete_phone_id_reports_for_date(
+            context.application.bot_data, today_key, db=db
+        )
 
         # Clear from pickle fallback
         for chat_id_str, days in list(group_data.items()):
@@ -3840,6 +3860,20 @@ async def extract_and_save_data(update: Update, context: CallbackContext) -> Non
     if not full_text:
         return
 
+    # Deposit Report has its own parser and storage; it does not require
+    # Showdata's Khaifa/Date fields.
+    today_key = get_data_key()
+    phone_number, id_number = _extract_phone_id_values(full_text)
+    _upsert_phone_id_report_entry(
+        context.application.bot_data,
+        chat_id,
+        today_key,
+        update.message.message_id,
+        phone_number,
+        id_number,
+    )
+
+    # Showdata processing starts here and keeps its own required fields.
     required_fields_present = all(
         re.search(field, full_text, re.IGNORECASE)
         for field in ["Khaifa", "Date"]
@@ -3857,17 +3891,6 @@ async def extract_and_save_data(update: Update, context: CallbackContext) -> Non
     extracted_email_phone = email_phone_match.group(1).strip() if email_phone_match else "N/A"
 
     stored_entry = f"{extracted_date}    {extracted_khaifa}    {extracted_email_phone}"
-
-    today_key = get_data_key()
-    phone_number, id_number = _extract_phone_id_values(full_text)
-    _upsert_phone_id_report_entry(
-        context.application.bot_data,
-        chat_id,
-        today_key,
-        update.message.message_id,
-        phone_number,
-        id_number,
-    )
 
     # Save to MongoDB (primary)
     existing = mg_load_group_data(chat_id, today_key)
@@ -4205,7 +4228,9 @@ async def clear_group_data_callback(update: Update, context: CallbackContext) ->
     chat_id_str = str(group_id_to_clear)
 
     mg_delete_all_group_data(chat_id_str)
-    # Manual per-group clearing must not touch Deposit Report records.
+    _delete_all_phone_id_reports_for_chat(
+        context.application.bot_data, chat_id_str
+    )
     if 'group_data' in context.application.bot_data and chat_id_str in context.application.bot_data['group_data']:
         del context.application.bot_data['group_data'][chat_id_str]
         if context.application.persistence:
