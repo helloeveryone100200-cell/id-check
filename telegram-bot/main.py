@@ -2769,25 +2769,52 @@ def mg_delete_all_phone_id_report_entries(chat_id: str) -> None:
         logging.warning("MongoDB phone_id_reports delete-all error: %s", e)
 
 
+def _phone_id_report_clear_state(bot_data: dict) -> dict:
+    """Persistent deletion markers prevent stale MongoDB rows reappearing after an outage."""
+    return bot_data.setdefault("phone_id_report_clear_state", {
+        "cleared_dates": set(),
+        "cleared_chat_dates": set(),
+        "active_chats_by_date": {},
+        "cleared_chats": set(),
+        "active_dates_by_chat": {},
+        "removed_sources": set(),
+    })
+
+
 def _get_phone_id_report_entries(bot_data: dict, chat_id: str, date_key: str) -> list:
-    """Read MongoDB first and use PicklePersistence as the fallback."""
+    """Read MongoDB first, while honoring durable clears and Pickle fallback."""
+    chat_id, date_key = str(chat_id), str(date_key)
+    state = _phone_id_report_clear_state(bot_data)
+    if (chat_id in state["cleared_chats"] and date_key not in state["active_dates_by_chat"].get(chat_id, set())) or (chat_id, date_key) in state["cleared_chat_dates"]:
+        return []
+    if date_key in state["cleared_dates"] and chat_id not in state["active_chats_by_date"].get(date_key, set()):
+        return []
+    removed_sources = state.setdefault("removed_sources", set())
     entries = mg_load_phone_id_report_entries(chat_id, date_key)
-    if entries:
-        return [dict(entry) for entry in entries]
-    cached = (
-        bot_data.get("phone_id_reports", {})
-        .get(str(chat_id), {})
-        .get(str(date_key), [])
-    )
-    return [dict(entry) for entry in cached]
+    if not entries:
+        entries = (
+            bot_data.get("phone_id_reports", {})
+            .get(chat_id, {})
+            .get(date_key, [])
+        )
+    # Source tombstones also cover edits/deletions when MongoDB was unreachable.
+    return [
+        dict(entry) for entry in entries
+        if (chat_id, str(entry.get("source_message_id", ""))) not in removed_sources
+    ]
 
 
 def _save_phone_id_report_entries(
     bot_data: dict, chat_id: str, date_key: str, entries: list
 ) -> None:
-    chat_id = str(chat_id)
-    date_key = str(date_key)
+    chat_id, date_key = str(chat_id), str(date_key)
     stored = [dict(entry) for entry in entries]
+    state = _phone_id_report_clear_state(bot_data)
+    if chat_id in state["cleared_chats"]:
+        state["active_dates_by_chat"].setdefault(chat_id, set()).add(date_key)
+    state["cleared_chat_dates"].discard((chat_id, date_key))
+    if date_key in state["cleared_dates"]:
+        state["active_chats_by_date"].setdefault(date_key, set()).add(chat_id)
     bot_data.setdefault("phone_id_reports", {}).setdefault(chat_id, {})[date_key] = stored
     mg_save_phone_id_report_entries(chat_id, date_key, stored)
 
@@ -2795,8 +2822,10 @@ def _save_phone_id_report_entries(
 def _delete_phone_id_report_entries(
     bot_data: dict, chat_id: str, date_key: str
 ) -> None:
-    chat_id = str(chat_id)
-    date_key = str(date_key)
+    chat_id, date_key = str(chat_id), str(date_key)
+    state = _phone_id_report_clear_state(bot_data)
+    state["cleared_chat_dates"].add((chat_id, date_key))
+    state["active_chats_by_date"].get(date_key, set()).discard(chat_id)
     mg_delete_phone_id_report_entries(chat_id, date_key)
     by_chat = bot_data.get("phone_id_reports", {}).get(chat_id, {})
     by_chat.pop(date_key, None)
@@ -2807,18 +2836,22 @@ def _delete_phone_id_report_entries(
 def _delete_phone_id_reports_for_date(
     bot_data: dict, date_key: str, db=None
 ) -> int:
-    """Clear one reporting day for every group from MongoDB and PicklePersistence."""
+    """Clear one reporting day globally, with durable markers if MongoDB is offline."""
+    date_key = str(date_key)
+    state = _phone_id_report_clear_state(bot_data)
+    state["cleared_dates"].add(date_key)
+    state["active_chats_by_date"].pop(date_key, None)
     removed = 0
     db = db if db is not None else get_mongo_db()
     if db is not None:
         try:
-            result = db["phone_id_reports"].delete_many({"date_key": str(date_key)})
+            result = db["phone_id_reports"].delete_many({"date_key": date_key})
             removed = result.deleted_count
         except Exception as e:
             logging.warning("MongoDB phone_id_reports daily clear error: %s", e)
     for chat_id, days in list(bot_data.get("phone_id_reports", {}).items()):
-        if str(date_key) in days:
-            del days[str(date_key)]
+        if date_key in days:
+            del days[date_key]
             if not days:
                 bot_data["phone_id_reports"].pop(chat_id, None)
     return removed
@@ -2826,6 +2859,7 @@ def _delete_phone_id_reports_for_date(
 
 def _delete_all_phone_id_reports_for_chat(bot_data: dict, chat_id: str) -> None:
     chat_id = str(chat_id)
+    _phone_id_report_clear_state(bot_data)["cleared_chats"].add(chat_id)
     mg_delete_all_phone_id_report_entries(chat_id)
     bot_data.get("phone_id_reports", {}).pop(chat_id, None)
 
@@ -3466,10 +3500,10 @@ async def clear_data(update: Update, context: CallbackContext) -> None:
         and chat_id in context.application.bot_data['group_data']
         and today_key in context.application.bot_data['group_data'][chat_id]
     )
-    phone_id_entries = _get_phone_id_report_entries(
+    deposit_entries = _get_phone_id_report_entries(
         context.application.bot_data, chat_id, today_key
     )
-    if not (mg_entries or pickle_has or phone_id_entries):
+    if not (mg_entries or pickle_has or deposit_entries):
         await _reply_custom(message, context.application.bot_data,
                             "cleardata_empty", today=today_key)
         return
@@ -3509,12 +3543,17 @@ async def cleardata_callback(update: Update, context: CallbackContext) -> None:
 
     # Delete only after the user explicitly confirms.
     mg_delete_group_data(chat_id, today_key)
-    _delete_phone_id_report_entries(context.application.bot_data, chat_id, today_key)
+    # Clear this group's Deposit Report for the same reporting day.
+    _delete_phone_id_report_entries(
+        context.application.bot_data, chat_id, today_key
+    )
     group_data = context.application.bot_data.get('group_data', {})
     if chat_id in group_data and today_key in group_data[chat_id]:
         del group_data[chat_id][today_key]
-        if context.application.persistence:
-            await context.application.persistence.flush()
+        if not group_data[chat_id]:
+            group_data.pop(chat_id, None)
+    if context.application.persistence:
+        await context.application.persistence.flush()
 
     chat_id_int = int(chat_id)
     for k in [k for k in plus_counters if k[0] == chat_id_int]:
@@ -3553,20 +3592,29 @@ async def admin_clearall_command(update: Update, context: CallbackContext) -> No
     group_data = context.application.bot_data.get('group_data', {})
     db = get_mongo_db()
     mg_count = 0
-    mg_phone_id_count = 0
     if db is not None:
         try:
             mg_count = db["group_data"].count_documents({"date_key": today_key})
-            mg_phone_id_count = db["phone_id_reports"].count_documents({"date_key": today_key})
         except Exception:
             pass
     pickle_count = sum(1 for d in group_data.values() if today_key in d)
-    phone_id_reports = context.application.bot_data.get("phone_id_reports", {})
-    pickle_phone_id_count = sum(
-        1 for days in phone_id_reports.values()
+    deposit_pickle_count = sum(
+        1 for days in context.application.bot_data.get("phone_id_reports", {}).values()
         if days.get(today_key)
     )
-    total_count = max(mg_count, pickle_count, mg_phone_id_count, pickle_phone_id_count)
+    deposit_mongo_count = 0
+    if db is not None:
+        try:
+            deposit_mongo_count = db["phone_id_reports"].count_documents(
+                {"date_key": today_key}
+            )
+        except Exception as e:
+            logging.warning("MongoDB admin clear count error: %s", e)
+    # This number is a data-source count, not a deduplicated group count;
+    # the same group can have both Showdata and Deposit Report records.
+    total_count = max(mg_count, pickle_count) + max(
+        deposit_mongo_count, deposit_pickle_count
+    )
     has_data = total_count > 0
 
     if not has_data:
@@ -3587,7 +3635,7 @@ async def admin_clearall_command(update: Update, context: CallbackContext) -> No
     ]])
     await update.message.reply_text(
         f"⚠️ <b>Group အားလုံး ရှင်းလင်းမည်</b>\n\n"
-        f"ယနေ့ ({today_key}) data ရှိသော group <b>{total_count}</b> ခု ကို ရှင်းမည်။\nဆက်လုပ်မည်လား?",
+        f"ယနေ့ ({today_key}) data record ရှိသည့် အရေအတွက် <b>{total_count}</b> ခုကို ရှင်းမည်။\nဆက်လုပ်မည်လား?",
         parse_mode='HTML',
         reply_markup=keyboard
     )
@@ -3657,9 +3705,17 @@ async def adminall_callback(update: Update, context: CallbackContext) -> None:
                 cleared_groups = result.deleted_count
             except Exception as e:
                 logging.warning(f"MongoDB adminall clear error: {e}")
-        _delete_phone_id_reports_for_date(
+        # Count Pickle-only groups before deletion so the success summary
+        # remains accurate when MongoDB is unavailable.
+        deposit_pickle_groups = sum(
+            1 for days in context.application.bot_data.get("phone_id_reports", {}).values()
+            if days.get(today_key)
+        )
+        # Clear the independent Deposit Report collection for this reporting day.
+        deposit_mongo_groups = _delete_phone_id_reports_for_date(
             context.application.bot_data, today_key, db=db
         )
+        deposit_cleared_groups = max(deposit_mongo_groups, deposit_pickle_groups)
 
         # Clear from pickle fallback
         for chat_id_str, days in list(group_data.items()):
@@ -3681,6 +3737,7 @@ async def adminall_callback(update: Update, context: CallbackContext) -> None:
         if context.application.persistence:
             await context.application.persistence.flush()
 
+        cleared_groups = max(cleared_groups, deposit_cleared_groups)
         await query.edit_message_text(
             f"✅ <b>ရှင်းလင်းမှု ပြီးပါပြီ</b>\n\nGroup <b>{cleared_groups}</b> ခု၏ ယနေ့ ({today_key}) data ရှင်းပြီးပါပြီ။",
             parse_mode='HTML'
@@ -3767,6 +3824,66 @@ def _extract_phone_id_values(full_text: str) -> tuple[str | None, str | None]:
     return phone_number, id_number
 
 
+def _remove_phone_id_report_source_from_other_dates(
+    bot_data: dict, chat_id: str, date_key: str, source_message_id: int
+) -> None:
+    """Remove an edited source message from stale reporting days before re-saving it."""
+    chat_id = str(chat_id)
+    date_key = str(date_key)
+    source_message_id = int(source_message_id)
+    _phone_id_report_clear_state(bot_data).setdefault("removed_sources", set()).add(
+        (chat_id, str(source_message_id))
+    )
+
+    # Keep the Pickle fallback consistent even when MongoDB is unavailable.
+    by_chat = bot_data.get("phone_id_reports", {}).get(chat_id, {})
+    for old_date, old_entries in list(by_chat.items()):
+        if str(old_date) == date_key:
+            continue
+        filtered = [
+            entry for entry in old_entries
+            if str(entry.get("source_message_id", "")) != str(source_message_id)
+        ]
+        if len(filtered) != len(old_entries):
+            if filtered:
+                by_chat[old_date] = filtered
+                mg_save_phone_id_report_entries(chat_id, str(old_date), filtered)
+            else:
+                by_chat.pop(old_date, None)
+                mg_delete_phone_id_report_entries(chat_id, str(old_date))
+    if not by_chat:
+        bot_data.get("phone_id_reports", {}).pop(chat_id, None)
+
+    db = get_mongo_db()
+    if db is not None:
+        try:
+            for doc in db["phone_id_reports"].find(
+                {"chat_id": chat_id, "date_key": {"$ne": date_key}},
+                {"date_key": 1, "entries": 1},
+            ):
+                old_date = str(doc.get("date_key", ""))
+                old_entries = doc.get("entries", [])
+                filtered = [
+                    entry for entry in old_entries
+                    if str(entry.get("source_message_id", "")) != str(source_message_id)
+                ]
+                if len(filtered) != len(old_entries):
+                    if filtered:
+                        db["phone_id_reports"].replace_one(
+                            {"_id": doc["_id"]},
+                            {
+                                "_id": doc["_id"],
+                                "chat_id": chat_id,
+                                "date_key": old_date,
+                                "entries": filtered,
+                            },
+                        )
+                    else:
+                        db["phone_id_reports"].delete_one({"_id": doc["_id"]})
+        except Exception as exc:
+            logging.warning("Deposit Report edited-message cleanup failed: %s", exc)
+
+
 def _upsert_phone_id_report_entry(
     bot_data: dict,
     chat_id: str,
@@ -3779,15 +3896,21 @@ def _upsert_phone_id_report_entry(
     entries = _get_phone_id_report_entries(bot_data, chat_id, date_key)
     entries = [
         entry for entry in entries
-        if entry.get("source_message_id") != int(source_message_id)
+        if str(entry.get("source_message_id", "")) != str(int(source_message_id))
     ]
+    state = _phone_id_report_clear_state(bot_data)
+    source_key = (str(chat_id), str(int(source_message_id)))
     if phone_number and id_number:
+        state.setdefault("removed_sources", set()).discard(source_key)
         entries.append({
             "source_message_id": int(source_message_id),
             "phone_number": str(phone_number),
             "id_number": str(id_number),
         })
-    _save_phone_id_report_entries(bot_data, chat_id, date_key, entries)
+    if entries:
+        _save_phone_id_report_entries(bot_data, chat_id, date_key, entries)
+    else:
+        _delete_phone_id_report_entries(bot_data, chat_id, date_key)
 
 
 async def deposit_report(update: Update, context: CallbackContext) -> None:
@@ -3849,6 +3972,23 @@ async def extract_and_save_data(update: Update, context: CallbackContext) -> Non
     if not full_text:
         return
 
+    # Deposit Report has its own parser and storage; it does not require
+    # Showdata's Khaifa/Date fields.
+    today_key = get_data_key()
+    phone_number, id_number = _extract_phone_id_values(full_text)
+    # Ignore unrelated messages instead of writing empty report documents.
+    # A message containing only one label is intentionally not stored as a pair.
+    if phone_number is not None or id_number is not None:
+        _upsert_phone_id_report_entry(
+            context.application.bot_data,
+            chat_id,
+            today_key,
+            update.message.message_id,
+            phone_number,
+            id_number,
+        )
+
+    # Showdata processing starts here and keeps its own required fields.
     required_fields_present = all(
         re.search(field, full_text, re.IGNORECASE)
         for field in ["Khaifa", "Date"]
@@ -3866,17 +4006,6 @@ async def extract_and_save_data(update: Update, context: CallbackContext) -> Non
     extracted_email_phone = email_phone_match.group(1).strip() if email_phone_match else "N/A"
 
     stored_entry = f"{extracted_date}    {extracted_khaifa}    {extracted_email_phone}"
-
-    today_key = get_data_key()
-    phone_number, id_number = _extract_phone_id_values(full_text)
-    _upsert_phone_id_report_entry(
-        context.application.bot_data,
-        chat_id,
-        today_key,
-        update.message.message_id,
-        phone_number,
-        id_number,
-    )
 
     # Save to MongoDB (primary)
     existing = mg_load_group_data(chat_id, today_key)
@@ -4213,18 +4342,43 @@ async def clear_group_data_callback(update: Update, context: CallbackContext) ->
     group_id_to_clear = query.data.split('_')[2]
     chat_id_str = str(group_id_to_clear)
 
-    mg_delete_all_group_data(chat_id_str)
-    _delete_all_phone_id_reports_for_chat(context.application.bot_data, chat_id_str)
-    if 'group_data' in context.application.bot_data and chat_id_str in context.application.bot_data['group_data']:
-        del context.application.bot_data['group_data'][chat_id_str]
-        if context.application.persistence:
-            await context.application.persistence.flush()
+    group_data = context.application.bot_data.get('group_data', {})
+    had_showdata = chat_id_str in group_data
+    had_deposit_report = bool(
+        context.application.bot_data.get("phone_id_reports", {}).get(chat_id_str)
+    )
+    db = get_mongo_db()
+    if db is not None:
         try:
-            chat = await context.application.bot.get_chat(chat_id=group_id_to_clear)
-            group_name = chat.title
-        except Exception:
-            group_name = "Unknown Group"
-        await query.edit_message_text(f"✅ {group_name} ({group_id_to_clear}) data ရှင်းပြီးပါပြီ။")
+            had_showdata = had_showdata or db["group_data"].count_documents(
+                {"chat_id": chat_id_str}
+            ) > 0
+        except Exception as exc:
+            logging.warning("Showdata group-clear precheck failed: %s", exc)
+    if db is not None and not had_deposit_report:
+        try:
+            had_deposit_report = db["phone_id_reports"].count_documents(
+                {"chat_id": chat_id_str}
+            ) > 0
+        except Exception as exc:
+            logging.warning("Deposit Report group-clear precheck failed: %s", exc)
+    mg_delete_all_group_data(chat_id_str)
+    _delete_all_phone_id_reports_for_chat(
+        context.application.bot_data, chat_id_str
+    )
+    if had_showdata:
+        group_data.pop(chat_id_str, None)
+    if context.application.persistence:
+        await context.application.persistence.flush()
+    try:
+        chat = await context.application.bot.get_chat(chat_id=group_id_to_clear)
+        group_name = chat.title
+    except Exception:
+        group_name = "Unknown Group"
+    if had_showdata or had_deposit_report:
+        await query.edit_message_text(
+            f"✅ {group_name} ({group_id_to_clear}) data ရှင်းပြီးပါပြီ။"
+        )
     else:
         await query.edit_message_text(f"No data for group {group_id_to_clear}.")
 
@@ -4523,16 +4677,25 @@ async def handle_deposit_report_edit(update: Update, context: CallbackContext) -
     if not msg:
         return
     text = msg.text or msg.caption or ''
-    if re.search(r"(?im)^\s*(?:Khaifa|Khat)\s*[-:]|^\s*Date\s*[-:]", text):
-        phone_number, id_number = _extract_phone_id_values(text)
-        _upsert_phone_id_report_entry(
-            context.application.bot_data,
-            str(update.effective_chat.id),
-            get_data_key(),
-            msg.message_id,
-            phone_number,
-            id_number,
-        )
+    # Always re-evaluate the edited message. If either field was removed,
+    # the upsert helper removes the prior pair for this source message.
+    phone_number, id_number = _extract_phone_id_values(text)
+    report_chat_id = str(update.effective_chat.id)
+    report_date_key = get_data_key()
+    _remove_phone_id_report_source_from_other_dates(
+        context.application.bot_data,
+        report_chat_id,
+        report_date_key,
+        msg.message_id,
+    )
+    _upsert_phone_id_report_entry(
+        context.application.bot_data,
+        report_chat_id,
+        report_date_key,
+        msg.message_id,
+        phone_number,
+        id_number,
+    )
     if '接电报' not in text or '首冲' not in text:
         if context.application.persistence:
             await context.application.persistence.flush()
@@ -7098,15 +7261,18 @@ def main():
     application.add_handler(MessageHandler(
         (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_deposit_report
     ), group=1)
+    # WhatsApp reports must use a separate handler group. PTB only runs the
+    # first matching handler within each group; sharing group=1 with the
+    # Deposit Report handler silently prevented this handler from running.
     application.add_handler(MessageHandler(
         (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_whatsapp_report
-    ), group=1)
+    ), group=4)
     application.add_handler(MessageHandler(
         filters.UpdateType.EDITED_MESSAGE & (filters.TEXT | filters.CAPTION), handle_deposit_report_edit
     ), group=1)
     application.add_handler(MessageHandler(
         filters.UpdateType.EDITED_MESSAGE & (filters.TEXT | filters.CAPTION), handle_whatsapp_report_edit
-    ), group=1)
+    ), group=4)
 
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_pm_math
