@@ -3860,7 +3860,10 @@ def _upsert_phone_id_report_entry(
             "phone_number": str(phone_number),
             "id_number": str(id_number),
         })
-    _save_phone_id_report_entries(bot_data, chat_id, date_key, entries)
+    if entries:
+        _save_phone_id_report_entries(bot_data, chat_id, date_key, entries)
+    else:
+        _delete_phone_id_report_entries(bot_data, chat_id, date_key)
 
 
 async def deposit_report(update: Update, context: CallbackContext) -> None:
