@@ -2776,6 +2776,7 @@ def _phone_id_report_clear_state(bot_data: dict) -> dict:
         "cleared_chat_dates": set(),
         "active_chats_by_date": {},
         "cleared_chats": set(),
+        "active_dates_by_chat": {},
     })
 
 
@@ -2783,7 +2784,7 @@ def _get_phone_id_report_entries(bot_data: dict, chat_id: str, date_key: str) ->
     """Read MongoDB first, while honoring durable clears and Pickle fallback."""
     chat_id, date_key = str(chat_id), str(date_key)
     state = _phone_id_report_clear_state(bot_data)
-    if chat_id in state["cleared_chats"] or (chat_id, date_key) in state["cleared_chat_dates"]:
+    if (chat_id in state["cleared_chats"] and date_key not in state["active_dates_by_chat"].get(chat_id, set())) or (chat_id, date_key) in state["cleared_chat_dates"]:
         return []
     if date_key in state["cleared_dates"] and chat_id not in state["active_chats_by_date"].get(date_key, set()):
         return []
@@ -2804,7 +2805,8 @@ def _save_phone_id_report_entries(
     chat_id, date_key = str(chat_id), str(date_key)
     stored = [dict(entry) for entry in entries]
     state = _phone_id_report_clear_state(bot_data)
-    state["cleared_chats"].discard(chat_id)
+    if chat_id in state["cleared_chats"]:
+        state["active_dates_by_chat"].setdefault(chat_id, set()).add(date_key)
     state["cleared_chat_dates"].discard((chat_id, date_key))
     if date_key in state["cleared_dates"]:
         state["active_chats_by_date"].setdefault(date_key, set()).add(chat_id)
