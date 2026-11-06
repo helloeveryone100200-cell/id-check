@@ -3926,14 +3926,17 @@ async def extract_and_save_data(update: Update, context: CallbackContext) -> Non
     # Showdata's Khaifa/Date fields.
     today_key = get_data_key()
     phone_number, id_number = _extract_phone_id_values(full_text)
-    _upsert_phone_id_report_entry(
-        context.application.bot_data,
-        chat_id,
-        today_key,
-        update.message.message_id,
-        phone_number,
-        id_number,
-    )
+    # Ignore unrelated messages instead of writing empty report documents.
+    # A message containing only one label is intentionally not stored as a pair.
+    if phone_number is not None or id_number is not None:
+        _upsert_phone_id_report_entry(
+            context.application.bot_data,
+            chat_id,
+            today_key,
+            update.message.message_id,
+            phone_number,
+            id_number,
+        )
 
     # Showdata processing starts here and keeps its own required fields.
     required_fields_present = all(
