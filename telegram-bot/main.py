@@ -7221,15 +7221,18 @@ def main():
     application.add_handler(MessageHandler(
         (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_deposit_report
     ), group=1)
+    # WhatsApp reports must use a separate handler group. PTB only runs the
+    # first matching handler within each group; sharing group=1 with the
+    # Deposit Report handler silently prevented this handler from running.
     application.add_handler(MessageHandler(
         (filters.TEXT | filters.CAPTION) & ~filters.COMMAND, handle_whatsapp_report
-    ), group=1)
+    ), group=4)
     application.add_handler(MessageHandler(
         filters.UpdateType.EDITED_MESSAGE & (filters.TEXT | filters.CAPTION), handle_deposit_report_edit
     ), group=1)
     application.add_handler(MessageHandler(
         filters.UpdateType.EDITED_MESSAGE & (filters.TEXT | filters.CAPTION), handle_whatsapp_report_edit
-    ), group=1)
+    ), group=4)
 
     application.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE, handle_pm_math
