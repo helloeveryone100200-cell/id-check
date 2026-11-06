@@ -264,15 +264,15 @@ class _FakeClearDataQuery:
 
 class PhoneIdDepositReportTests(unittest.TestCase):
     SAMPLE = (
-        "Gmail - Elsii\\n"
-        "Tele name - Elsa\\n"
-        "Username - Elsii\\n"
-        "Date - 6/11\\n"
-        "Age - 28\\n"
-        "Current work -\\n"
-        "Phone number      - 0915985240\\n"
-        "ID   - 8658096622\\n"
-        "Bank - CBE / 1000188151427\\n"
+        "Gmail - Elsii\n"
+        "Tele name - Elsa\n"
+        "Username - Elsii\n"
+        "Date - 6/11\n"
+        "Age - 28\n"
+        "Current work -\n"
+        "Phone number      - 0915985240\n"
+        "ID   - 8658096622\n"
+        "Bank - CBE / 1000188151427\n"
         "Khaifa - 清风"
     )
 
@@ -284,8 +284,8 @@ class PhoneIdDepositReportTests(unittest.TestCase):
 
     def test_parser_ignores_missing_or_placeholder_values(self):
         incomplete = (
-            "Date - 6/11\\nKhaifa - 清风\\n"
-            "Phone number - -\\nID - 8658096622"
+            "Date - 6/11\nKhaifa - 清风\n"
+            "Phone number - -\nID - 8658096622"
         )
         self.assertEqual(
             bot._extract_phone_id_values(incomplete),
@@ -344,8 +344,8 @@ class PhoneIdDepositReportTests(unittest.TestCase):
         self.assertEqual(len(message.sent), 1)
         self.assertEqual(
             message.sent[0][0],
-            "0915985240\\n8658096622\\n\\n"
-            "0911769600\\n7146512061",
+            "0915985240\n8658096622\n\n"
+            "0911769600\n7146512061",
         )
 
     def test_same_source_message_is_updated_not_duplicated(self):
@@ -399,7 +399,7 @@ class PhoneIdDepositReportTests(unittest.TestCase):
         self.assertNotIn(today, bot_data["phone_id_reports"][chat_id])
         self.assertIn(previous, bot_data["phone_id_reports"][chat_id])
         self.assertTrue(query.edits)
-        self.assertIn("cleardata_ok", query.edits[0][0] if "cleardata_ok" in query.edits[0][0] else "cleardata_ok")
+        self.assertIn("Data deleted for today", query.edits[0][0])
 
     def test_daily_cleanup_removes_only_the_previous_day_from_every_group(self):
         bot_data = {
