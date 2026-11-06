@@ -2775,6 +2775,7 @@ def _phone_id_report_clear_state(bot_data: dict) -> dict:
         "cleared_dates": set(),
         "cleared_chat_dates": set(),
         "active_chats_by_date": {},
+        "cleared_chats": set(),
     })
 
 
@@ -2782,7 +2783,7 @@ def _get_phone_id_report_entries(bot_data: dict, chat_id: str, date_key: str) ->
     """Read MongoDB first, while honoring durable clears and Pickle fallback."""
     chat_id, date_key = str(chat_id), str(date_key)
     state = _phone_id_report_clear_state(bot_data)
-    if (chat_id, date_key) in state["cleared_chat_dates"]:
+    if chat_id in state["cleared_chats"] or (chat_id, date_key) in state["cleared_chat_dates"]:
         return []
     if date_key in state["cleared_dates"] and chat_id not in state["active_chats_by_date"].get(date_key, set()):
         return []
@@ -2803,6 +2804,7 @@ def _save_phone_id_report_entries(
     chat_id, date_key = str(chat_id), str(date_key)
     stored = [dict(entry) for entry in entries]
     state = _phone_id_report_clear_state(bot_data)
+    state["cleared_chats"].discard(chat_id)
     state["cleared_chat_dates"].discard((chat_id, date_key))
     if date_key in state["cleared_dates"]:
         state["active_chats_by_date"].setdefault(date_key, set()).add(chat_id)
@@ -2850,6 +2852,7 @@ def _delete_phone_id_reports_for_date(
 
 def _delete_all_phone_id_reports_for_chat(bot_data: dict, chat_id: str) -> None:
     chat_id = str(chat_id)
+    _phone_id_report_clear_state(bot_data)["cleared_chats"].add(chat_id)
     mg_delete_all_phone_id_report_entries(chat_id)
     bot_data.get("phone_id_reports", {}).pop(chat_id, None)
 
