@@ -3798,14 +3798,15 @@ def _remove_phone_id_report_source_from_other_dates(
             continue
         filtered = [
             entry for entry in old_entries
-            if int(entry.get("source_message_id", -1)) != source_message_id
+            if str(entry.get("source_message_id", "")) != str(source_message_id)
         ]
         if len(filtered) != len(old_entries):
             if filtered:
                 by_chat[old_date] = filtered
+                mg_save_phone_id_report_entries(chat_id, str(old_date), filtered)
             else:
                 by_chat.pop(old_date, None)
-            mg_save_phone_id_report_entries(chat_id, str(old_date), filtered)
+                mg_delete_phone_id_report_entries(chat_id, str(old_date))
     if not by_chat:
         bot_data.get("phone_id_reports", {}).pop(chat_id, None)
 
@@ -3820,18 +3821,21 @@ def _remove_phone_id_report_source_from_other_dates(
                 old_entries = doc.get("entries", [])
                 filtered = [
                     entry for entry in old_entries
-                    if int(entry.get("source_message_id", -1)) != source_message_id
+                    if str(entry.get("source_message_id", "")) != str(source_message_id)
                 ]
                 if len(filtered) != len(old_entries):
-                    db["phone_id_reports"].replace_one(
-                        {"_id": doc["_id"]},
-                        {
-                            "_id": doc["_id"],
-                            "chat_id": chat_id,
-                            "date_key": old_date,
-                            "entries": filtered,
-                        },
-                    )
+                    if filtered:
+                        db["phone_id_reports"].replace_one(
+                            {"_id": doc["_id"]},
+                            {
+                                "_id": doc["_id"],
+                                "chat_id": chat_id,
+                                "date_key": old_date,
+                                "entries": filtered,
+                            },
+                        )
+                    else:
+                        db["phone_id_reports"].delete_one({"_id": doc["_id"]})
         except Exception as exc:
             logging.warning("Deposit Report edited-message cleanup failed: %s", exc)
 
@@ -3848,7 +3852,7 @@ def _upsert_phone_id_report_entry(
     entries = _get_phone_id_report_entries(bot_data, chat_id, date_key)
     entries = [
         entry for entry in entries
-        if entry.get("source_message_id") != int(source_message_id)
+        if str(entry.get("source_message_id", "")) != str(int(source_message_id))
     ]
     if phone_number and id_number:
         entries.append({
