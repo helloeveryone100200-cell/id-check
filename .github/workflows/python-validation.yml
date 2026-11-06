@@ -516,6 +516,7 @@ jobs:
           # Each custom emoji is moved into Telegram's dedicated icon field.
           custom_reply_button_specs = {
               "showdata_button": ("🔥 Daily Report", "🔥", "720000000000001", "Showdata"),
+              "deposit_report_button": ("📄 Client IDs", "📄", "720000000000009", "Deposit Report"),
               "total_plus_button": ("💎 Plus Summary", "💎", "720000000000002", "Total Plus"),
               "clear_data_button": ("🧹 Clear Today", "🧹", "720000000000003", "Clear Data"),
               "reset_plus_button": ("🔁 Reset Counter", "🔁", "720000000000004", "Reset Plus"),
@@ -565,6 +566,7 @@ jobs:
           # the same underlying action, not a text-dependent hard-coded command.
           action_handlers = {
               "showdata_button": "show_data",
+              "deposit_report_button": "deposit_report",
               "total_plus_button": "total_plus_command",
               "clear_data_button": "clear_data",
               "reset_plus_button": "reset_plus_command",
@@ -643,6 +645,8 @@ jobs:
           assert "Remove Schedule" not in private_buttons
           assert "Clear All" not in private_buttons
           assert "Reset Plus All" not in private_buttons
+          assert "Deposit Report" not in private_buttons
+          assert "Deposit Report" in group_buttons
           assert "Clear All" not in group_buttons
           assert "Reset Plus All" not in group_buttons
           admin_pm_buttons = [
