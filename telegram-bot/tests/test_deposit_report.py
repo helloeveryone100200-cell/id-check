@@ -74,7 +74,7 @@ class DepositReportStorageTests(unittest.TestCase):
         bot._upsert_phone_id_report_entry(
             data, "-1001", "2026-11-07", 41, "0980477682", None
         )
-        self.assertEqual(data["phone_id_reports"]["-1001"]["2026-11-07"], [])
+        self.assertNotIn("phone_id_reports", data)
 
     def test_upsert_replaces_same_source_message(self):
         data = {
