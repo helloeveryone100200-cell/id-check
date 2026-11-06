@@ -2922,12 +2922,15 @@ async def report_form_command(update: Update, context: CallbackContext) -> None:
     )
 
 
+MAIN_REPLY_KEYBOARD_VERSION = "group-schedule-monthly-admin-v5"
+
+
 def _main_reply_keyboard(
     bot_data: dict,
     include_schedule: bool = False,
-    include_monthly_admin: bool = False,
+    include_admin_pm_controls: bool = False,
 ) -> ReplyKeyboardMarkup:
-    """Build the persistent keyboard with group and ADMIN-only PM controls."""
+    """Build group/user controls and show global admin actions only in Admin PM."""
     rows = [
         [
             _schedule_keyboard_button(bot_data, "showdata_button", style="primary"),
@@ -2937,12 +2940,12 @@ def _main_reply_keyboard(
             _schedule_keyboard_button(bot_data, "clear_data_button", style="danger"),
             _schedule_keyboard_button(bot_data, "reset_plus_button", style="danger"),
         ],
-        [
+    ]
+    if include_admin_pm_controls:
+        rows.append([
             _schedule_keyboard_button(bot_data, "clear_all_button", style="success"),
             _schedule_keyboard_button(bot_data, "reset_plus_all_button", style="success"),
-        ],
-    ]
-    if include_monthly_admin:
+        ])
         rows.append([
             _schedule_keyboard_button(
                 bot_data,
@@ -2988,15 +2991,15 @@ async def ensure_reply_keyboard(update: Update, context: CallbackContext) -> Non
     text = (message.text or "").strip()
     if re.match(r"^/(?:start|menu)(?:@\w+)?(?:\s|$)", text, re.IGNORECASE):
         return
-    if context.chat_data.get("reply_keyboard_version") == "group-schedule-monthly-admin-v4":
+    if context.chat_data.get("reply_keyboard_version") == MAIN_REPLY_KEYBOARD_VERSION:
         return
 
     context.chat_data["reply_keyboard_sent"] = True
-    context.chat_data["reply_keyboard_version"] = "group-schedule-monthly-admin-v4"
+    context.chat_data["reply_keyboard_version"] = MAIN_REPLY_KEYBOARD_VERSION
     bot_data = context.application.bot_data
     include_schedule = update.effective_chat.type in {"group", "supergroup"}
     user = update.effective_user
-    include_monthly_admin = (
+    include_admin_pm_controls = (
         update.effective_chat.type == "private"
         and user is not None
         and user.id in ADMIN_IDS
@@ -3006,7 +3009,7 @@ async def ensure_reply_keyboard(update: Update, context: CallbackContext) -> Non
         reply_markup=_main_reply_keyboard(
             bot_data,
             include_schedule=include_schedule,
-            include_monthly_admin=include_monthly_admin,
+            include_admin_pm_controls=include_admin_pm_controls,
         ),
     )
 
@@ -3016,11 +3019,11 @@ async def main_menu_command(
 ) -> None:
     await save_chat_id(update.effective_chat.id, context, update.effective_chat.type)
     context.chat_data["reply_keyboard_sent"] = True
-    context.chat_data["reply_keyboard_version"] = "group-schedule-monthly-admin-v4"
+    context.chat_data["reply_keyboard_version"] = MAIN_REPLY_KEYBOARD_VERSION
     bot_data = context.application.bot_data
     include_schedule = update.effective_chat.type in {"group", "supergroup"}
     user = update.effective_user
-    include_monthly_admin = (
+    include_admin_pm_controls = (
         update.effective_chat.type == "private"
         and user is not None
         and user.id in ADMIN_IDS
@@ -3028,7 +3031,7 @@ async def main_menu_command(
     reply_markup = _main_reply_keyboard(
         bot_data,
         include_schedule=include_schedule,
-        include_monthly_admin=include_monthly_admin,
+        include_admin_pm_controls=include_admin_pm_controls,
     )
     if show_welcome:
         user_name = update.effective_user.full_name if update.effective_user else "User"

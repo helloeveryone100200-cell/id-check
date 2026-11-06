@@ -537,9 +537,17 @@ jobs:
           custom_group_keyboard = bot._main_reply_keyboard(
               custom_keyboard_data, include_schedule=True
           )
+          custom_admin_keyboard = bot._main_reply_keyboard(
+              custom_keyboard_data,
+              include_schedule=True,
+              include_admin_pm_controls=True,
+          )
+          # Destructive global actions are hidden from group keyboards but
+          # remain customizable and available in the private Admin menu.
           custom_buttons_by_text = {
               button.text: button
-              for row in custom_group_keyboard.keyboard
+              for markup in (custom_group_keyboard, custom_admin_keyboard)
+              for row in markup.keyboard
               for button in row
           }
           for button_key, (raw_text, emoji, emoji_id, original_label) in (
@@ -633,6 +641,19 @@ jobs:
           assert "Schedule" not in private_buttons
           assert "Set Schedule" not in private_buttons
           assert "Remove Schedule" not in private_buttons
+          assert "Clear All" not in private_buttons
+          assert "Reset Plus All" not in private_buttons
+          assert "Clear All" not in group_buttons
+          assert "Reset Plus All" not in group_buttons
+          admin_pm_buttons = [
+              button.text
+              for row in bot._main_reply_keyboard(
+                  {}, include_admin_pm_controls=True
+              ).keyboard
+              for button in row
+          ]
+          assert "Clear All" in admin_pm_buttons
+          assert "Reset Plus All" in admin_pm_buttons
           assert "Schedule" in group_buttons
           assert "Set Schedule" not in group_buttons
           assert "Remove Schedule" not in group_buttons

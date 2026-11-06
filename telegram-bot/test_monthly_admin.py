@@ -108,10 +108,39 @@ class MonthlyAllClearAdminTests(unittest.TestCase):
         regular_pm = self._menu_for("private", regular_id)
         admin_group = self._menu_for("supergroup", admin_id)
 
-        self.assertIn("Monthly All Clear Data", _button_texts(admin_pm))
-        self.assertNotIn("Monthly All Clear Data", _button_texts(regular_pm))
-        self.assertNotIn("Monthly All Clear Data", _button_texts(admin_group))
-        self.assertIn("Monthly Total", _button_texts(admin_group))
+        admin_pm_buttons = _button_texts(admin_pm)
+        regular_pm_buttons = _button_texts(regular_pm)
+        admin_group_buttons = _button_texts(admin_group)
+
+        for label in ("Clear All", "Reset Plus All", "Monthly All Clear Data"):
+            self.assertIn(label, admin_pm_buttons)
+            self.assertNotIn(label, regular_pm_buttons)
+            self.assertNotIn(label, admin_group_buttons)
+
+        self.assertIn("Monthly Total", admin_group_buttons)
+
+    def test_existing_group_keyboard_is_refreshed_without_global_admin_actions(self):
+        message = _FakeMessage("supergroup")
+        message.text = "hello"
+        update = SimpleNamespace(
+            message=message,
+            effective_chat=SimpleNamespace(id=-100123, type="supergroup"),
+            effective_user=SimpleNamespace(id=max(bot.ADMIN_IDS) + 12345),
+        )
+        context = SimpleNamespace(
+            application=SimpleNamespace(bot_data={}),
+            chat_data={"reply_keyboard_version": "group-schedule-monthly-admin-v4"},
+        )
+
+        asyncio.run(bot.ensure_reply_keyboard(update, context))
+
+        self.assertEqual(
+            context.chat_data["reply_keyboard_version"],
+            bot.MAIN_REPLY_KEYBOARD_VERSION,
+        )
+        buttons = _button_texts(message.sent[-1][1]["reply_markup"])
+        self.assertNotIn("Clear All", buttons)
+        self.assertNotIn("Reset Plus All", buttons)
 
     def test_non_admin_cannot_start_global_clear(self):
         message = _FakeMessage("private")
