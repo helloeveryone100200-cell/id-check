@@ -3783,6 +3783,59 @@ def _extract_phone_id_values(full_text: str) -> tuple[str | None, str | None]:
     return phone_number, id_number
 
 
+def _remove_phone_id_report_source_from_other_dates(
+    bot_data: dict, chat_id: str, date_key: str, source_message_id: int
+) -> None:
+    """Remove an edited source message from stale reporting days before re-saving it."""
+    chat_id = str(chat_id)
+    date_key = str(date_key)
+    source_message_id = int(source_message_id)
+
+    # Keep the Pickle fallback consistent even when MongoDB is unavailable.
+    by_chat = bot_data.get("phone_id_reports", {}).get(chat_id, {})
+    for old_date, old_entries in list(by_chat.items()):
+        if str(old_date) == date_key:
+            continue
+        filtered = [
+            entry for entry in old_entries
+            if int(entry.get("source_message_id", -1)) != source_message_id
+        ]
+        if len(filtered) != len(old_entries):
+            if filtered:
+                by_chat[old_date] = filtered
+            else:
+                by_chat.pop(old_date, None)
+            mg_save_phone_id_report_entries(chat_id, str(old_date), filtered)
+    if not by_chat:
+        bot_data.get("phone_id_reports", {}).pop(chat_id, None)
+
+    db = get_mongo_db()
+    if db is not None:
+        try:
+            for doc in db["phone_id_reports"].find(
+                {"chat_id": chat_id, "date_key": {"$ne": date_key}},
+                {"date_key": 1, "entries": 1},
+            ):
+                old_date = str(doc.get("date_key", ""))
+                old_entries = doc.get("entries", [])
+                filtered = [
+                    entry for entry in old_entries
+                    if int(entry.get("source_message_id", -1)) != source_message_id
+                ]
+                if len(filtered) != len(old_entries):
+                    db["phone_id_reports"].replace_one(
+                        {"_id": doc["_id"]},
+                        {
+                            "_id": doc["_id"],
+                            "chat_id": chat_id,
+                            "date_key": old_date,
+                            "entries": filtered,
+                        },
+                    )
+        except Exception as exc:
+            logging.warning("Deposit Report edited-message cleanup failed: %s", exc)
+
+
 def _upsert_phone_id_report_entry(
     bot_data: dict,
     chat_id: str,
@@ -4238,6 +4291,13 @@ async def clear_group_data_callback(update: Update, context: CallbackContext) ->
         context.application.bot_data.get("phone_id_reports", {}).get(chat_id_str)
     )
     db = get_mongo_db()
+    if db is not None:
+        try:
+            had_showdata = had_showdata or db["group_data"].count_documents(
+                {"chat_id": chat_id_str}
+            ) > 0
+        except Exception as exc:
+            logging.warning("Showdata group-clear precheck failed: %s", exc)
     if db is not None and not had_deposit_report:
         try:
             had_deposit_report = db["phone_id_reports"].count_documents(
@@ -4563,10 +4623,18 @@ async def handle_deposit_report_edit(update: Update, context: CallbackContext) -
     # Always re-evaluate the edited message. If either field was removed,
     # the upsert helper removes the prior pair for this source message.
     phone_number, id_number = _extract_phone_id_values(text)
+    report_chat_id = str(update.effective_chat.id)
+    report_date_key = get_data_key()
+    _remove_phone_id_report_source_from_other_dates(
+        context.application.bot_data,
+        report_chat_id,
+        report_date_key,
+        msg.message_id,
+    )
     _upsert_phone_id_report_entry(
         context.application.bot_data,
-        str(update.effective_chat.id),
-        get_data_key(),
+        report_chat_id,
+        report_date_key,
         msg.message_id,
         phone_number,
         id_number,
