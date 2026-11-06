@@ -148,6 +148,44 @@ class DepositReportStorageTests(unittest.TestCase):
             entries = bot._get_phone_id_report_entries(data, "-1001", "2026-11-07")
         self.assertEqual(entries[0]["phone_number"], "0900000000")
 
+    def test_group_clear_tombstone_hides_stale_mongo_after_restart(self):
+        data = {"phone_id_reports": {"-1001": {"2026-11-07": []}}}
+        with patch.object(bot, "mg_delete_phone_id_report_entries"):
+            bot._delete_phone_id_report_entries(data, "-1001", "2026-11-07")
+        with patch.object(
+            bot, "mg_load_phone_id_report_entries",
+            return_value=[{"source_message_id": 1, "phone_number": "old", "id_number": "old"}],
+        ):
+            self.assertEqual(
+                bot._get_phone_id_report_entries(data, "-1001", "2026-11-07"), []
+            )
+
+    def test_global_clear_tombstone_hides_mongo_but_allows_new_group_data(self):
+        data = {}
+        class Collection:
+            def delete_many(self, query):
+                return SimpleNamespace(deleted_count=0)
+        class Database:
+            def __getitem__(self, name):
+                return Collection()
+        bot._delete_phone_id_reports_for_date(data, "2026-11-07", db=Database())
+        stale = [{"source_message_id": 1, "phone_number": "old", "id_number": "old"}]
+        with patch.object(bot, "mg_load_phone_id_report_entries", return_value=stale):
+            self.assertEqual(
+                bot._get_phone_id_report_entries(data, "-1001", "2026-11-07"), []
+            )
+            bot._save_phone_id_report_entries(
+                data, "-1002", "2026-11-07",
+                [{"source_message_id": 2, "phone_number": "new", "id_number": "new"}],
+            )
+            self.assertEqual(
+                bot._get_phone_id_report_entries(data, "-1002", "2026-11-07")[0]["phone_number"],
+                "new",
+            )
+            self.assertEqual(
+                bot._get_phone_id_report_entries(data, "-1001", "2026-11-07"), []
+            )
+
     def test_delete_for_date_preserves_other_reporting_days(self):
         class Collection:
             def delete_many(self, query):
