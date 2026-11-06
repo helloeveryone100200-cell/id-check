@@ -151,5 +151,51 @@ class DepositReportMessageFlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("phone_id_reports", data)
 
 
+
+class DepositReportClearTests(unittest.IsolatedAsyncioTestCase):
+    async def test_confirmed_clear_deletes_showdata_and_deposit_report(self):
+        query = SimpleNamespace(
+            data="cleardata_confirm",
+            message=SimpleNamespace(chat_id=-100123),
+            answer=AsyncMock(),
+        )
+        update = SimpleNamespace(callback_query=query)
+        persistence = SimpleNamespace(flush=AsyncMock())
+        app = SimpleNamespace(
+            bot_data={"group_data": {"-100123": {bot.get_data_key(): ["row"]}}},
+            persistence=persistence,
+        )
+        context = SimpleNamespace(application=app)
+        with patch.object(bot, "mg_delete_group_data") as delete_showdata, \\
+             patch.object(bot, "_delete_phone_id_report_entries") as delete_deposit, \\
+             patch.object(bot, "_edit_custom", new=AsyncMock()), \\
+             patch.object(bot, "plus_counters", {}), \\
+             patch.object(bot, "plus_counted_msgs", {}), \\
+             patch.object(bot, "data_msg_map", {}), \\
+             patch.object(bot, "save_plus_data"), \\
+             patch.object(bot, "save_data_msg_map"), \\
+             patch.object(bot, "clear_monthly_active_records"), \\
+             patch.object(bot, "get_mongo_db", return_value=None):
+            await bot.cleardata_callback(update, context)
+        delete_showdata.assert_called_once_with("-100123", bot.get_data_key())
+        delete_deposit.assert_called_once_with(
+            app.bot_data, "-100123", bot.get_data_key()
+        )
+        persistence.flush.assert_awaited_once()
+
+    async def test_cancelled_clear_does_not_delete_either_dataset(self):
+        query = SimpleNamespace(data="cleardata_cancel", answer=AsyncMock())
+        update = SimpleNamespace(callback_query=query)
+        context = SimpleNamespace(
+            application=SimpleNamespace(bot_data={}, persistence=None)
+        )
+        with patch.object(bot, "mg_delete_group_data") as delete_showdata, \\
+             patch.object(bot, "_delete_phone_id_report_entries") as delete_deposit, \\
+             patch.object(bot, "_edit_custom", new=AsyncMock()):
+            await bot.cleardata_callback(update, context)
+        delete_showdata.assert_not_called()
+        delete_deposit.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
