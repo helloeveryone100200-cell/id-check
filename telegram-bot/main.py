@@ -3576,6 +3576,8 @@ async def admin_clearall_command(update: Update, context: CallbackContext) -> No
             )
         except Exception as e:
             logging.warning("MongoDB admin clear count error: %s", e)
+    # This number is a data-source count, not a deduplicated group count;
+    # the same group can have both Showdata and Deposit Report records.
     total_count = max(mg_count, pickle_count) + max(
         deposit_mongo_count, deposit_pickle_count
     )
@@ -3599,7 +3601,7 @@ async def admin_clearall_command(update: Update, context: CallbackContext) -> No
     ]])
     await update.message.reply_text(
         f"⚠️ <b>Group အားလုံး ရှင်းလင်းမည်</b>\n\n"
-        f"ယနေ့ ({today_key}) data ရှိသော group <b>{total_count}</b> ခု ကို ရှင်းမည်။\nဆက်လုပ်မည်လား?",
+        f"ယနေ့ ({today_key}) data record ရှိသည့် အရေအတွက် <b>{total_count}</b> ခုကို ရှင်းမည်။\nဆက်လုပ်မည်လား?",
         parse_mode='HTML',
         reply_markup=keyboard
     )
@@ -4235,6 +4237,14 @@ async def clear_group_data_callback(update: Update, context: CallbackContext) ->
     had_deposit_report = bool(
         context.application.bot_data.get("phone_id_reports", {}).get(chat_id_str)
     )
+    db = get_mongo_db()
+    if db is not None and not had_deposit_report:
+        try:
+            had_deposit_report = db["phone_id_reports"].count_documents(
+                {"chat_id": chat_id_str}
+            ) > 0
+        except Exception as exc:
+            logging.warning("Deposit Report group-clear precheck failed: %s", exc)
     mg_delete_all_group_data(chat_id_str)
     _delete_all_phone_id_reports_for_chat(
         context.application.bot_data, chat_id_str
