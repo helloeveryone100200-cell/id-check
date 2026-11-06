@@ -2777,6 +2777,7 @@ def _phone_id_report_clear_state(bot_data: dict) -> dict:
         "active_chats_by_date": {},
         "cleared_chats": set(),
         "active_dates_by_chat": {},
+        "removed_sources": set(),
     })
 
 
@@ -2788,15 +2789,19 @@ def _get_phone_id_report_entries(bot_data: dict, chat_id: str, date_key: str) ->
         return []
     if date_key in state["cleared_dates"] and chat_id not in state["active_chats_by_date"].get(date_key, set()):
         return []
+    removed_sources = state.setdefault("removed_sources", set())
     entries = mg_load_phone_id_report_entries(chat_id, date_key)
-    if entries:
-        return [dict(entry) for entry in entries]
-    cached = (
-        bot_data.get("phone_id_reports", {})
-        .get(chat_id, {})
-        .get(date_key, [])
-    )
-    return [dict(entry) for entry in cached]
+    if not entries:
+        entries = (
+            bot_data.get("phone_id_reports", {})
+            .get(chat_id, {})
+            .get(date_key, [])
+        )
+    # Source tombstones also cover edits/deletions when MongoDB was unreachable.
+    return [
+        dict(entry) for entry in entries
+        if (chat_id, str(entry.get("source_message_id", ""))) not in removed_sources
+    ]
 
 
 def _save_phone_id_report_entries(
@@ -3826,6 +3831,9 @@ def _remove_phone_id_report_source_from_other_dates(
     chat_id = str(chat_id)
     date_key = str(date_key)
     source_message_id = int(source_message_id)
+    _phone_id_report_clear_state(bot_data).setdefault("removed_sources", set()).add(
+        (chat_id, str(source_message_id))
+    )
 
     # Keep the Pickle fallback consistent even when MongoDB is unavailable.
     by_chat = bot_data.get("phone_id_reports", {}).get(chat_id, {})
@@ -3890,7 +3898,10 @@ def _upsert_phone_id_report_entry(
         entry for entry in entries
         if str(entry.get("source_message_id", "")) != str(int(source_message_id))
     ]
+    state = _phone_id_report_clear_state(bot_data)
+    source_key = (str(chat_id), str(int(source_message_id)))
     if phone_number and id_number:
+        state.setdefault("removed_sources", set()).discard(source_key)
         entries.append({
             "source_message_id": int(source_message_id),
             "phone_number": str(phone_number),
