@@ -97,6 +97,8 @@ CUSTOM_MSG_LABELS = {
     "cleardata_cancelled":"❌ /cleardata — Cancelled confirmation message",
     "showdata_empty":   "📭 /showdata — No data message",
     "showdata_footer":  "💬 /showdata — Footer hint",
+    "deposit_report_empty": "📭 Deposit Report — No Phone Number / ID records for today",
+    "deposit_report_group_only": "🔒 Deposit Report — Group-only message",
     "total_plus_empty": "📊 /total_plus — No data message",
     "total_plus_footer":"💬 /total_plus — Footer hint",
     "reset_plus_empty": "📊 /reset_plus — No counter message",
@@ -108,6 +110,7 @@ CUSTOM_MSG_LABELS = {
     "owner_only_action_denied": "🔒 Owner-only actions — Access denied message",
     # Customizable reply-keyboard buttons
     "showdata_button": "📊 Showdata — Reply Keyboard button",
+    "deposit_report_button": "📄 Deposit Report — Group reply-keyboard button",
     "monthly_total_button": "📊 Monthly Total — Group reply-keyboard button",
     "monthly_total_message": "📊 Monthly Total — Main report (Article; {totals}, {empty}, {warning})",
     "monthly_total_row": "🧾 Monthly Total — Khaifa row format ({khaifa}, {count})",
@@ -232,6 +235,8 @@ DEFAULT_MSGS: dict = {
     "cleardata_cancelled": "❌ Clear data လုပ်ဆောင်ချက်ကို cancel လုပ်လိုက်ပါပြီ။",
     "showdata_empty":    "No data collected yet for today ({today}) in this chat.",
     "showdata_footer":   "{mention} report ပြင်ဆင်ပြီးပါက /cleardata နှိပ်ပါ။",
+    "deposit_report_empty": "ယနေ့ ({today}) အတွက် Phone Number နှင့် ID ပါဝင်သော Deposit Report မရှိသေးပါ။",
+    "deposit_report_group_only": "Deposit Report ကို Group ထဲတွင်သာ အသုံးပြုနိုင်ပါသည်။",
     "total_plus_empty":  "📊 ဤ chat တွင် (+) reply မရှိသေးပါ။",
     "total_plus_footer": "{mention} အလုပ်ဆင်းမည်ဆိုပါက /reset_plus နှိပ်ခဲ့ပါ",
     "reset_plus_empty":  "📊 ဤ chat တွင် ရှင်လင်းစရာ Plus counter မရှိသေးပါ။",
@@ -243,6 +248,7 @@ DEFAULT_MSGS: dict = {
     "owner_only_action_denied": "❌ ဤလုပ်ဆောင်ချက်ကို Bot Owner သာ အသုံးပြုနိုင်ပါသည်။",
     # Reply-keyboard labels (rendered as plain text if no custom emoji is configured)
     "showdata_button": "Showdata",
+    "deposit_report_button": "Deposit Report",
     "monthly_total_button": MONTHLY_TOTAL_BUTTON_TEXT,
     "monthly_total_message": "📊 Monthly Total\n\n{totals}{empty}\n\n{warning}",
     "monthly_total_row": "{khaifa}   -   {count}",
@@ -497,6 +503,7 @@ _SCHEDULE_ACTION_BUTTON_KEYS = {
 }
 _REPLY_KEYBOARD_BUTTON_KEYS = {
     "showdata_button",
+    "deposit_report_button",
     "monthly_total_button",
     "monthly_all_clear_button",
     "total_plus_button",
@@ -2709,6 +2716,120 @@ def mg_delete_all_group_data(chat_id: str) -> None:
         logging.warning(f"MongoDB mg_delete_all_group_data error: {e}")
 
 
+# Phone / ID extracts are stored separately from Showdata so the original
+# Showdata formatting and its existing records remain unchanged.
+def mg_save_phone_id_report_entries(chat_id: str, date_key: str, entries: list) -> None:
+    db = get_mongo_db()
+    if db is None:
+        return
+    try:
+        db["phone_id_reports"].replace_one(
+            {"_id": f"{chat_id}:{date_key}"},
+            {
+                "_id": f"{chat_id}:{date_key}",
+                "chat_id": chat_id,
+                "date_key": date_key,
+                "entries": entries,
+            },
+            upsert=True,
+        )
+    except PyMongoError as e:
+        logging.warning("MongoDB phone_id_reports save error: %s", e)
+
+
+def mg_load_phone_id_report_entries(chat_id: str, date_key: str) -> list:
+    db = get_mongo_db()
+    if db is None:
+        return []
+    try:
+        doc = db["phone_id_reports"].find_one({"_id": f"{chat_id}:{date_key}"})
+        return doc.get("entries", []) if doc else []
+    except PyMongoError as e:
+        logging.warning("MongoDB phone_id_reports load error: %s", e)
+        return []
+
+
+def mg_delete_phone_id_report_entries(chat_id: str, date_key: str) -> None:
+    db = get_mongo_db()
+    if db is None:
+        return
+    try:
+        db["phone_id_reports"].delete_one({"_id": f"{chat_id}:{date_key}"})
+    except PyMongoError as e:
+        logging.warning("MongoDB phone_id_reports delete error: %s", e)
+
+
+def mg_delete_all_phone_id_report_entries(chat_id: str) -> None:
+    db = get_mongo_db()
+    if db is None:
+        return
+    try:
+        db["phone_id_reports"].delete_many({"chat_id": chat_id})
+    except PyMongoError as e:
+        logging.warning("MongoDB phone_id_reports delete-all error: %s", e)
+
+
+def _get_phone_id_report_entries(bot_data: dict, chat_id: str, date_key: str) -> list:
+    """Read MongoDB first and use PicklePersistence as the fallback."""
+    entries = mg_load_phone_id_report_entries(chat_id, date_key)
+    if entries:
+        return [dict(entry) for entry in entries]
+    cached = (
+        bot_data.get("phone_id_reports", {})
+        .get(str(chat_id), {})
+        .get(str(date_key), [])
+    )
+    return [dict(entry) for entry in cached]
+
+
+def _save_phone_id_report_entries(
+    bot_data: dict, chat_id: str, date_key: str, entries: list
+) -> None:
+    chat_id = str(chat_id)
+    date_key = str(date_key)
+    stored = [dict(entry) for entry in entries]
+    bot_data.setdefault("phone_id_reports", {}).setdefault(chat_id, {})[date_key] = stored
+    mg_save_phone_id_report_entries(chat_id, date_key, stored)
+
+
+def _delete_phone_id_report_entries(
+    bot_data: dict, chat_id: str, date_key: str
+) -> None:
+    chat_id = str(chat_id)
+    date_key = str(date_key)
+    mg_delete_phone_id_report_entries(chat_id, date_key)
+    by_chat = bot_data.get("phone_id_reports", {}).get(chat_id, {})
+    by_chat.pop(date_key, None)
+    if not by_chat:
+        bot_data.get("phone_id_reports", {}).pop(chat_id, None)
+
+
+def _delete_phone_id_reports_for_date(
+    bot_data: dict, date_key: str, db=None
+) -> int:
+    """Clear one reporting day for every group from MongoDB and PicklePersistence."""
+    removed = 0
+    db = db if db is not None else get_mongo_db()
+    if db is not None:
+        try:
+            result = db["phone_id_reports"].delete_many({"date_key": str(date_key)})
+            removed = result.deleted_count
+        except Exception as e:
+            logging.warning("MongoDB phone_id_reports daily clear error: %s", e)
+    for chat_id, days in list(bot_data.get("phone_id_reports", {}).items()):
+        if str(date_key) in days:
+            del days[str(date_key)]
+            if not days:
+                bot_data["phone_id_reports"].pop(chat_id, None)
+    return removed
+
+
+def _delete_all_phone_id_reports_for_chat(bot_data: dict, chat_id: str) -> None:
+    chat_id = str(chat_id)
+    mg_delete_all_phone_id_report_entries(chat_id)
+    bot_data.get("phone_id_reports", {}).pop(chat_id, None)
+
+
 def get_all_duplicate_ids() -> list:
     """Return list of duplicate entry IDs from MongoDB group_data.
     Each item: {'id': str, 'poster_count': int, 'posters': list[str]}
@@ -2922,7 +3043,7 @@ async def report_form_command(update: Update, context: CallbackContext) -> None:
     )
 
 
-MAIN_REPLY_KEYBOARD_VERSION = "group-schedule-monthly-admin-v5"
+MAIN_REPLY_KEYBOARD_VERSION = "group-schedule-monthly-admin-v6"
 
 
 def _main_reply_keyboard(
@@ -2954,6 +3075,13 @@ def _main_reply_keyboard(
             ),
         ])
     if include_schedule:
+        rows.append([
+            _schedule_keyboard_button(
+                bot_data,
+                "deposit_report_button",
+                style="primary",
+            ),
+        ])
         rows.append([
             _schedule_keyboard_button(
                 bot_data,
@@ -3096,6 +3224,7 @@ async def main_menu_text_handler(update: Update, context: CallbackContext) -> No
     """Route current and legacy customizable reply-keyboard labels to their original actions."""
     handlers = {
         "showdata_button": show_data,
+        "deposit_report_button": deposit_report,
         "monthly_total_button": monthly_total_command,
         "monthly_all_clear_button": monthly_all_clear_start,
         "total_plus_button": total_plus_command,
@@ -3337,7 +3466,10 @@ async def clear_data(update: Update, context: CallbackContext) -> None:
         and chat_id in context.application.bot_data['group_data']
         and today_key in context.application.bot_data['group_data'][chat_id]
     )
-    if not (mg_entries or pickle_has):
+    phone_id_entries = _get_phone_id_report_entries(
+        context.application.bot_data, chat_id, today_key
+    )
+    if not (mg_entries or pickle_has or phone_id_entries):
         await _reply_custom(message, context.application.bot_data,
                             "cleardata_empty", today=today_key)
         return
@@ -3377,6 +3509,7 @@ async def cleardata_callback(update: Update, context: CallbackContext) -> None:
 
     # Delete only after the user explicitly confirms.
     mg_delete_group_data(chat_id, today_key)
+    _delete_phone_id_report_entries(context.application.bot_data, chat_id, today_key)
     group_data = context.application.bot_data.get('group_data', {})
     if chat_id in group_data and today_key in group_data[chat_id]:
         del group_data[chat_id][today_key]
@@ -3420,13 +3553,20 @@ async def admin_clearall_command(update: Update, context: CallbackContext) -> No
     group_data = context.application.bot_data.get('group_data', {})
     db = get_mongo_db()
     mg_count = 0
+    mg_phone_id_count = 0
     if db is not None:
         try:
             mg_count = db["group_data"].count_documents({"date_key": today_key})
+            mg_phone_id_count = db["phone_id_reports"].count_documents({"date_key": today_key})
         except Exception:
             pass
     pickle_count = sum(1 for d in group_data.values() if today_key in d)
-    total_count = max(mg_count, pickle_count)
+    phone_id_reports = context.application.bot_data.get("phone_id_reports", {})
+    pickle_phone_id_count = sum(
+        1 for days in phone_id_reports.values()
+        if days.get(today_key)
+    )
+    total_count = max(mg_count, pickle_count, mg_phone_id_count, pickle_phone_id_count)
     has_data = total_count > 0
 
     if not has_data:
@@ -3517,6 +3657,9 @@ async def adminall_callback(update: Update, context: CallbackContext) -> None:
                 cleared_groups = result.deleted_count
             except Exception as e:
                 logging.warning(f"MongoDB adminall clear error: {e}")
+        _delete_phone_id_reports_for_date(
+            context.application.bot_data, today_key, db=db
+        )
 
         # Clear from pickle fallback
         for chat_id_str, days in list(group_data.items()):
@@ -3604,6 +3747,97 @@ async def show_data(update: Update, context: CallbackContext) -> None:
                         "showdata_footer", parse_mode='HTML', mention=_mention)
 
 
+def _extract_phone_id_values(full_text: str) -> tuple[str | None, str | None]:
+    """Extract literal Phone Number and ID values from their own report lines."""
+    def _field(pattern: str) -> str | None:
+        match = re.search(
+            pattern + r"[ \t]*[-:：][ \t]*([^\r\n]*)",
+            full_text or "",
+            re.IGNORECASE | re.MULTILINE,
+        )
+        if not match:
+            return None
+        value = match.group(1).strip()
+        if not value or value.casefold() in {"-", "—", "–", "n/a", "na", "none"}:
+            return None
+        return value
+
+    phone_number = _field(r"^[ \t]*Phone(?:[ \t]+number)?")
+    id_number = _field(r"^[ \t]*ID(?:[ \t]+(?:number|no\.?))?")
+    return phone_number, id_number
+
+
+def _upsert_phone_id_report_entry(
+    bot_data: dict,
+    chat_id: str,
+    date_key: str,
+    source_message_id: int,
+    phone_number: str | None,
+    id_number: str | None,
+) -> None:
+    """Replace an edited message's row and retain one phone/ID pair per source report."""
+    entries = _get_phone_id_report_entries(bot_data, chat_id, date_key)
+    entries = [
+        entry for entry in entries
+        if entry.get("source_message_id") != int(source_message_id)
+    ]
+    if phone_number and id_number:
+        entries.append({
+            "source_message_id": int(source_message_id),
+            "phone_number": str(phone_number),
+            "id_number": str(id_number),
+        })
+    _save_phone_id_report_entries(bot_data, chat_id, date_key, entries)
+
+
+async def deposit_report(update: Update, context: CallbackContext) -> None:
+    """Show today's Phone Number / ID pairs to any member of this group."""
+    message = _update_message(update)
+    chat = update.effective_chat
+    if message is None or chat is None:
+        return
+    if chat.type not in {"group", "supergroup"}:
+        await _reply_custom(
+            message, context.application.bot_data, "deposit_report_group_only"
+        )
+        return
+
+    chat_id = str(chat.id)
+    today_key = get_data_key()
+    await save_chat_id(chat.id, context, chat.type)
+    entries = _get_phone_id_report_entries(
+        context.application.bot_data, chat_id, today_key
+    )
+    valid_entries = [
+        entry for entry in entries
+        if entry.get("phone_number") and entry.get("id_number")
+    ]
+    if not valid_entries:
+        await _reply_custom(
+            message,
+            context.application.bot_data,
+            "deposit_report_empty",
+            today=today_key,
+        )
+        return
+
+    # Keep each pair together and split safely before Telegram's message limit.
+    chunks: list[str] = []
+    current = ""
+    for entry in valid_entries:
+        block = f"{entry['phone_number']}\n{entry['id_number']}"
+        candidate = block if not current else f"{current}\n\n{block}"
+        if len(candidate) > 3900 and current:
+            chunks.append(current)
+            current = block
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    for chunk in chunks:
+        await message.reply_text(chunk)
+
+
 async def extract_and_save_data(update: Update, context: CallbackContext) -> None:
     if not update.message:
         return
@@ -3634,6 +3868,15 @@ async def extract_and_save_data(update: Update, context: CallbackContext) -> Non
     stored_entry = f"{extracted_date}    {extracted_khaifa}    {extracted_email_phone}"
 
     today_key = get_data_key()
+    phone_number, id_number = _extract_phone_id_values(full_text)
+    _upsert_phone_id_report_entry(
+        context.application.bot_data,
+        chat_id,
+        today_key,
+        update.message.message_id,
+        phone_number,
+        id_number,
+    )
 
     # Save to MongoDB (primary)
     existing = mg_load_group_data(chat_id, today_key)
@@ -3971,6 +4214,7 @@ async def clear_group_data_callback(update: Update, context: CallbackContext) ->
     chat_id_str = str(group_id_to_clear)
 
     mg_delete_all_group_data(chat_id_str)
+    _delete_all_phone_id_reports_for_chat(context.application.bot_data, chat_id_str)
     if 'group_data' in context.application.bot_data and chat_id_str in context.application.bot_data['group_data']:
         del context.application.bot_data['group_data'][chat_id_str]
         if context.application.persistence:
@@ -4279,7 +4523,19 @@ async def handle_deposit_report_edit(update: Update, context: CallbackContext) -
     if not msg:
         return
     text = msg.text or msg.caption or ''
+    if re.search(r"(?im)^\s*(?:Khaifa|Khat)\s*[-:]|^\s*Date\s*[-:]", text):
+        phone_number, id_number = _extract_phone_id_values(text)
+        _upsert_phone_id_report_entry(
+            context.application.bot_data,
+            str(update.effective_chat.id),
+            get_data_key(),
+            msg.message_id,
+            phone_number,
+            id_number,
+        )
     if '接电报' not in text or '首冲' not in text:
+        if context.application.persistence:
+            await context.application.persistence.flush()
         return
     user_id = msg.from_user.id if msg.from_user else None
     chat_id = str(update.effective_chat.id)
@@ -6392,6 +6648,9 @@ async def auto_clear_job(context: CallbackContext) -> None:
             cleared_count = result.deleted_count
         except Exception as e:
             logging.warning(f"auto_clear_job MongoDB error: {e}")
+    _delete_phone_id_reports_for_date(
+        context.application.bot_data, prev_key, db=db
+    )
 
     group_data = context.application.bot_data.get('group_data', {})
     for chat_id_str, days in list(group_data.items()):

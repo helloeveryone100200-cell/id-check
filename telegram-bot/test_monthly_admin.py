@@ -118,6 +118,9 @@ class MonthlyAllClearAdminTests(unittest.TestCase):
             self.assertNotIn(label, admin_group_buttons)
 
         self.assertIn("Monthly Total", admin_group_buttons)
+        self.assertIn("Deposit Report", admin_group_buttons)
+        self.assertNotIn("Deposit Report", admin_pm_buttons)
+        self.assertNotIn("Deposit Report", regular_pm_buttons)
 
     def test_existing_group_keyboard_is_refreshed_without_global_admin_actions(self):
         message = _FakeMessage("supergroup")
@@ -129,7 +132,7 @@ class MonthlyAllClearAdminTests(unittest.TestCase):
         )
         context = SimpleNamespace(
             application=SimpleNamespace(bot_data={}),
-            chat_data={"reply_keyboard_version": "group-schedule-monthly-admin-v4"},
+            chat_data={"reply_keyboard_version": "group-schedule-monthly-admin-v5"},
         )
 
         asyncio.run(bot.ensure_reply_keyboard(update, context))
@@ -240,6 +243,184 @@ class MonthlyAllClearAdminTests(unittest.TestCase):
         self.assertEqual(len(db["monthly_total_counts"].rows), 2)
         self.assertTrue(query.edits)
         self.assertIn("မပြောင်းလဲပါ", query.edits[0][0])
+
+
+
+
+
+class _FakeClearDataQuery:
+    def __init__(self, callback_data, chat_id):
+        self.data = callback_data
+        self.message = SimpleNamespace(chat_id=chat_id)
+        self.answers = []
+        self.edits = []
+
+    async def answer(self, *args, **kwargs):
+        self.answers.append((args, kwargs))
+
+    async def edit_message_text(self, text, **kwargs):
+        self.edits.append((text, kwargs))
+
+
+class PhoneIdDepositReportTests(unittest.TestCase):
+    SAMPLE = (
+        "Gmail - Elsii\n"
+        "Tele name - Elsa\n"
+        "Username - Elsii\n"
+        "Date - 6/11\n"
+        "Age - 28\n"
+        "Current work -\n"
+        "Phone number      - 0915985240\n"
+        "ID   - 8658096622\n"
+        "Bank - CBE / 1000188151427\n"
+        "Khaifa - 清风"
+    )
+
+    def test_parser_extracts_phone_and_id_only_and_preserves_leading_zero(self):
+        self.assertEqual(
+            bot._extract_phone_id_values(self.SAMPLE),
+            ("0915985240", "8658096622"),
+        )
+
+    def test_parser_ignores_missing_or_placeholder_values(self):
+        incomplete = (
+            "Date - 6/11\nKhaifa - 清风\n"
+            "Phone number - -\nID - 8658096622"
+        )
+        self.assertEqual(
+            bot._extract_phone_id_values(incomplete),
+            (None, "8658096622"),
+        )
+
+    def test_group_menu_shows_deposit_report_but_private_menu_does_not(self):
+        group_buttons = _button_texts(
+            bot._main_reply_keyboard({}, include_schedule=True)
+        )
+        private_buttons = _button_texts(
+            bot._main_reply_keyboard({}, include_schedule=False)
+        )
+        self.assertIn("Deposit Report", group_buttons)
+        self.assertNotIn("Deposit Report", private_buttons)
+
+    def test_deposit_report_is_available_to_any_group_member_and_formats_pairs(self):
+        chat_id = "-100444"
+        date_key = "2026-11-06"
+        message = _FakeMessage("supergroup")
+        update = SimpleNamespace(
+            message=message,
+            effective_message=message,
+            effective_chat=SimpleNamespace(id=int(chat_id), type="supergroup"),
+            effective_user=SimpleNamespace(id=777, full_name="Regular Member"),
+        )
+        context = SimpleNamespace(
+            application=SimpleNamespace(
+                bot_data={
+                    "phone_id_reports": {
+                        chat_id: {
+                            date_key: [
+                                {
+                                    "source_message_id": 1,
+                                    "phone_number": "0915985240",
+                                    "id_number": "8658096622",
+                                },
+                                {
+                                    "source_message_id": 2,
+                                    "phone_number": "0911769600",
+                                    "id_number": "7146512061",
+                                },
+                            ]
+                        }
+                    }
+                },
+                persistence=None,
+            )
+        )
+
+        with patch.object(bot, "get_data_key", return_value=date_key), patch.object(
+            bot, "get_mongo_db", return_value=None
+        ):
+            asyncio.run(bot.deposit_report(update, context))
+
+        self.assertEqual(len(message.sent), 1)
+        self.assertEqual(
+            message.sent[0][0],
+            "0915985240\n8658096622\n\n"
+            "0911769600\n7146512061",
+        )
+
+    def test_same_source_message_is_updated_not_duplicated(self):
+        bot_data = {}
+        with patch.object(bot, "get_mongo_db", return_value=None):
+            bot._upsert_phone_id_report_entry(
+                bot_data, "-1001", "2026-11-06", 25, "0911111111", "111"
+            )
+            bot._upsert_phone_id_report_entry(
+                bot_data, "-1001", "2026-11-06", 25, "0922222222", "222"
+            )
+
+        rows = bot_data["phone_id_reports"]["-1001"]["2026-11-06"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["phone_number"], "0922222222")
+        self.assertEqual(rows[0]["id_number"], "222")
+
+    def test_clear_data_removes_today_phone_id_records_and_keeps_other_days(self):
+        chat_id = "-100555"
+        today = "2026-11-06"
+        previous = "2026-11-05"
+        bot_data = {
+            "phone_id_reports": {
+                chat_id: {
+                    today: [{"source_message_id": 1, "phone_number": "0900", "id_number": "100"}],
+                    previous: [{"source_message_id": 2, "phone_number": "0800", "id_number": "200"}],
+                }
+            },
+            "group_data": {chat_id: {today: ["today deposit record"]}},
+        }
+        query = _FakeClearDataQuery("cleardata_confirm", int(chat_id))
+        context = SimpleNamespace(
+            application=SimpleNamespace(bot_data=bot_data, persistence=None)
+        )
+
+        with (
+            patch.object(bot, "get_data_key", return_value=today),
+            patch.object(bot, "get_mongo_db", return_value=None),
+            patch.object(bot, "mg_delete_group_data"),
+            patch.object(bot, "save_plus_data"),
+            patch.object(bot, "save_data_msg_map"),
+            patch.object(bot, "clear_monthly_active_records"),
+            patch.object(bot, "plus_counters", {}),
+            patch.object(bot, "plus_counted_msgs", {}),
+            patch.object(bot, "data_msg_map", {}),
+        ):
+            asyncio.run(bot.cleardata_callback(
+                SimpleNamespace(callback_query=query), context
+            ))
+
+        self.assertNotIn(today, bot_data["phone_id_reports"][chat_id])
+        self.assertIn(previous, bot_data["phone_id_reports"][chat_id])
+        self.assertTrue(query.edits)
+        self.assertIn("Data deleted for today", query.edits[0][0])
+
+    def test_daily_cleanup_removes_only_the_previous_day_from_every_group(self):
+        bot_data = {
+            "phone_id_reports": {
+                "-1001": {
+                    "2026-11-05": [{"phone_number": "091", "id_number": "1"}],
+                    "2026-11-04": [{"phone_number": "092", "id_number": "2"}],
+                },
+                "-1002": {
+                    "2026-11-05": [{"phone_number": "093", "id_number": "3"}],
+                },
+            }
+        }
+        with patch.object(bot, "get_mongo_db", return_value=None):
+            removed = bot._delete_phone_id_reports_for_date(
+                bot_data, "2026-11-05"
+            )
+        self.assertEqual(removed, 0)
+        self.assertNotIn("2026-11-05", bot_data["phone_id_reports"]["-1001"])
+        self.assertIn("2026-11-04", bot_data["phone_id_reports"]["-1001"])
+        self.assertNotIn("-1002", bot_data["phone_id_reports"])
 
 
 
