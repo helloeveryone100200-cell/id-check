@@ -3670,7 +3670,7 @@ async def adminall_callback(update: Update, context: CallbackContext) -> None:
             except Exception as e:
                 logging.warning(f"MongoDB adminall clear error: {e}")
         # Clear the independent Deposit Report collection for this reporting day.
-        _delete_phone_id_reports_for_date(
+        deposit_cleared_groups = _delete_phone_id_reports_for_date(
             context.application.bot_data, today_key, db=db
         )
 
@@ -3694,6 +3694,7 @@ async def adminall_callback(update: Update, context: CallbackContext) -> None:
         if context.application.persistence:
             await context.application.persistence.flush()
 
+        cleared_groups = max(cleared_groups, deposit_cleared_groups)
         await query.edit_message_text(
             f"✅ <b>ရှင်းလင်းမှု ပြီးပါပြီ</b>\n\nGroup <b>{cleared_groups}</b> ခု၏ ယနေ့ ({today_key}) data ရှင်းပြီးပါပြီ။",
             parse_mode='HTML'
@@ -4549,16 +4550,17 @@ async def handle_deposit_report_edit(update: Update, context: CallbackContext) -
     if not msg:
         return
     text = msg.text or msg.caption or ''
-    if re.search(r"(?im)^\s*(?:Khaifa|Khat)\s*[-:]|^\s*Date\s*[-:]", text):
-        phone_number, id_number = _extract_phone_id_values(text)
-        _upsert_phone_id_report_entry(
-            context.application.bot_data,
-            str(update.effective_chat.id),
-            get_data_key(),
-            msg.message_id,
-            phone_number,
-            id_number,
-        )
+    # Always re-evaluate the edited message. If either field was removed,
+    # the upsert helper removes the prior pair for this source message.
+    phone_number, id_number = _extract_phone_id_values(text)
+    _upsert_phone_id_report_entry(
+        context.application.bot_data,
+        str(update.effective_chat.id),
+        get_data_key(),
+        msg.message_id,
+        phone_number,
+        id_number,
+    )
     if '接电报' not in text or '首冲' not in text:
         if context.application.persistence:
             await context.application.persistence.flush()
