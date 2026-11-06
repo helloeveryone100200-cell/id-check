@@ -234,16 +234,18 @@ class DepositReportClearTests(unittest.IsolatedAsyncioTestCase):
             persistence=persistence,
         )
         context = SimpleNamespace(application=app)
-        with patch.object(bot, "mg_delete_group_data") as delete_showdata, \\
-             patch.object(bot, "_delete_phone_id_report_entries") as delete_deposit, \\
-             patch.object(bot, "_edit_custom", new=AsyncMock()), \\
-             patch.object(bot, "plus_counters", {}), \\
-             patch.object(bot, "plus_counted_msgs", {}), \\
-             patch.object(bot, "data_msg_map", {}), \\
-             patch.object(bot, "save_plus_data"), \\
-             patch.object(bot, "save_data_msg_map"), \\
-             patch.object(bot, "clear_monthly_active_records"), \\
-             patch.object(bot, "get_mongo_db", return_value=None):
+        with (
+            patch.object(bot, "mg_delete_group_data") as delete_showdata,
+            patch.object(bot, "_delete_phone_id_report_entries") as delete_deposit,
+            patch.object(bot, "_edit_custom", new=AsyncMock()),
+            patch.object(bot, "plus_counters", {}),
+            patch.object(bot, "plus_counted_msgs", {}),
+            patch.object(bot, "data_msg_map", {}),
+            patch.object(bot, "save_plus_data"),
+            patch.object(bot, "save_data_msg_map"),
+            patch.object(bot, "clear_monthly_active_records"),
+            patch.object(bot, "get_mongo_db", return_value=None),
+        ):
             await bot.cleardata_callback(update, context)
         delete_showdata.assert_called_once_with("-100123", bot.get_data_key())
         delete_deposit.assert_called_once_with(
@@ -257,9 +259,11 @@ class DepositReportClearTests(unittest.IsolatedAsyncioTestCase):
         context = SimpleNamespace(
             application=SimpleNamespace(bot_data={}, persistence=None)
         )
-        with patch.object(bot, "mg_delete_group_data") as delete_showdata, \\
-             patch.object(bot, "_delete_phone_id_report_entries") as delete_deposit, \\
-             patch.object(bot, "_edit_custom", new=AsyncMock()):
+        with (
+            patch.object(bot, "mg_delete_group_data") as delete_showdata,
+            patch.object(bot, "_delete_phone_id_report_entries") as delete_deposit,
+            patch.object(bot, "_edit_custom", new=AsyncMock()),
+        ):
             await bot.cleardata_callback(update, context)
         delete_showdata.assert_not_called()
         delete_deposit.assert_not_called()
