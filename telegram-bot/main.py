@@ -3516,8 +3516,10 @@ async def cleardata_callback(update: Update, context: CallbackContext) -> None:
     group_data = context.application.bot_data.get('group_data', {})
     if chat_id in group_data and today_key in group_data[chat_id]:
         del group_data[chat_id][today_key]
-        if context.application.persistence:
-            await context.application.persistence.flush()
+        if not group_data[chat_id]:
+            group_data.pop(chat_id, None)
+    if context.application.persistence:
+        await context.application.persistence.flush()
 
     chat_id_int = int(chat_id)
     for k in [k for k in plus_counters if k[0] == chat_id_int]:
@@ -4227,20 +4229,28 @@ async def clear_group_data_callback(update: Update, context: CallbackContext) ->
     group_id_to_clear = query.data.split('_')[2]
     chat_id_str = str(group_id_to_clear)
 
+    group_data = context.application.bot_data.get('group_data', {})
+    had_showdata = chat_id_str in group_data
+    had_deposit_report = bool(
+        context.application.bot_data.get("phone_id_reports", {}).get(chat_id_str)
+    )
     mg_delete_all_group_data(chat_id_str)
     _delete_all_phone_id_reports_for_chat(
         context.application.bot_data, chat_id_str
     )
-    if 'group_data' in context.application.bot_data and chat_id_str in context.application.bot_data['group_data']:
-        del context.application.bot_data['group_data'][chat_id_str]
-        if context.application.persistence:
-            await context.application.persistence.flush()
-        try:
-            chat = await context.application.bot.get_chat(chat_id=group_id_to_clear)
-            group_name = chat.title
-        except Exception:
-            group_name = "Unknown Group"
-        await query.edit_message_text(f"✅ {group_name} ({group_id_to_clear}) data ရှင်းပြီးပါပြီ။")
+    if had_showdata:
+        group_data.pop(chat_id_str, None)
+    if context.application.persistence:
+        await context.application.persistence.flush()
+    try:
+        chat = await context.application.bot.get_chat(chat_id=group_id_to_clear)
+        group_name = chat.title
+    except Exception:
+        group_name = "Unknown Group"
+    if had_showdata or had_deposit_report:
+        await query.edit_message_text(
+            f"✅ {group_name} ({group_id_to_clear}) data ရှင်းပြီးပါပြီ။"
+        )
     else:
         await query.edit_message_text(f"No data for group {group_id_to_clear}.")
 
