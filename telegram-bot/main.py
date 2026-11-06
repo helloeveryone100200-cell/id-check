@@ -3553,13 +3553,20 @@ async def admin_clearall_command(update: Update, context: CallbackContext) -> No
     group_data = context.application.bot_data.get('group_data', {})
     db = get_mongo_db()
     mg_count = 0
+    mg_phone_id_count = 0
     if db is not None:
         try:
             mg_count = db["group_data"].count_documents({"date_key": today_key})
+            mg_phone_id_count = db["phone_id_reports"].count_documents({"date_key": today_key})
         except Exception:
             pass
     pickle_count = sum(1 for d in group_data.values() if today_key in d)
-    total_count = max(mg_count, pickle_count)
+    phone_id_reports = context.application.bot_data.get("phone_id_reports", {})
+    pickle_phone_id_count = sum(
+        1 for days in phone_id_reports.values()
+        if days.get(today_key)
+    )
+    total_count = max(mg_count, pickle_count, mg_phone_id_count, pickle_phone_id_count)
     has_data = total_count > 0
 
     if not has_data:
@@ -4516,7 +4523,7 @@ async def handle_deposit_report_edit(update: Update, context: CallbackContext) -
     if not msg:
         return
     text = msg.text or msg.caption or ''
-    if re.search(r"(?im)^\\s*Khaifa\\s*[-:]|^\\s*Date\\s*[-:]", text):
+    if re.search(r"(?im)^\s*(?:Khaifa|Khat)\s*[-:]|^\s*Date\s*[-:]", text):
         phone_number, id_number = _extract_phone_id_values(text)
         _upsert_phone_id_report_entry(
             context.application.bot_data,
