@@ -3744,7 +3744,7 @@ def _extract_phone_id_values(full_text: str) -> tuple[str | None, str | None]:
     """Extract literal Phone Number and ID values from their own report lines."""
     def _field(pattern: str) -> str | None:
         match = re.search(
-            pattern + r"\\s*[-:：]\\s*(.*?)\\s*$",
+            pattern + r"\s*[-:：]\s*(.*?)\s*$",
             full_text or "",
             re.IGNORECASE | re.MULTILINE,
         )
@@ -3755,8 +3755,8 @@ def _extract_phone_id_values(full_text: str) -> tuple[str | None, str | None]:
             return None
         return value
 
-    phone_number = _field(r"^\\s*Phone(?:\\s+number)?")
-    id_number = _field(r"^\\s*ID(?:\\s+(?:number|no\\.?))?")
+    phone_number = _field(r"^\s*Phone(?:\s+number)?")
+    id_number = _field(r"^\s*ID(?:\s+(?:number|no\.?))?")
     return phone_number, id_number
 
 
@@ -3818,8 +3818,8 @@ async def deposit_report(update: Update, context: CallbackContext) -> None:
     chunks: list[str] = []
     current = ""
     for entry in valid_entries:
-        block = f"{entry['phone_number']}\\n{entry['id_number']}"
-        candidate = block if not current else f"{current}\\n\\n{block}"
+        block = f"{entry['phone_number']}\n{entry['id_number']}"
+        candidate = block if not current else f"{current}\n\n{block}"
         if len(candidate) > 3900 and current:
             chunks.append(current)
             current = block
@@ -4516,7 +4516,19 @@ async def handle_deposit_report_edit(update: Update, context: CallbackContext) -
     if not msg:
         return
     text = msg.text or msg.caption or ''
+    if re.search(r"(?im)^\\s*Khaifa\\s*[-:]|^\\s*Date\\s*[-:]", text):
+        phone_number, id_number = _extract_phone_id_values(text)
+        _upsert_phone_id_report_entry(
+            context.application.bot_data,
+            str(update.effective_chat.id),
+            get_data_key(),
+            msg.message_id,
+            phone_number,
+            id_number,
+        )
     if '接电报' not in text or '首冲' not in text:
+        if context.application.persistence:
+            await context.application.persistence.flush()
         return
     user_id = msg.from_user.id if msg.from_user else None
     chat_id = str(update.effective_chat.id)
