@@ -3671,10 +3671,17 @@ async def adminall_callback(update: Update, context: CallbackContext) -> None:
                 cleared_groups = result.deleted_count
             except Exception as e:
                 logging.warning(f"MongoDB adminall clear error: {e}")
+        # Count Pickle-only groups before deletion so the success summary
+        # remains accurate when MongoDB is unavailable.
+        deposit_pickle_groups = sum(
+            1 for days in context.application.bot_data.get("phone_id_reports", {}).values()
+            if days.get(today_key)
+        )
         # Clear the independent Deposit Report collection for this reporting day.
-        deposit_cleared_groups = _delete_phone_id_reports_for_date(
+        deposit_mongo_groups = _delete_phone_id_reports_for_date(
             context.application.bot_data, today_key, db=db
         )
+        deposit_cleared_groups = max(deposit_mongo_groups, deposit_pickle_groups)
 
         # Clear from pickle fallback
         for chat_id_str, days in list(group_data.items()):
