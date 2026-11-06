@@ -3751,7 +3751,7 @@ def _extract_phone_id_values(full_text: str) -> tuple[str | None, str | None]:
     """Extract literal Phone Number and ID values from their own report lines."""
     def _field(pattern: str) -> str | None:
         match = re.search(
-            pattern + r"\s*[-:：]\s*(.*?)\s*$",
+            pattern + r"[ \t]*[-:：][ \t]*([^\r\n]*)",
             full_text or "",
             re.IGNORECASE | re.MULTILINE,
         )
@@ -3762,8 +3762,8 @@ def _extract_phone_id_values(full_text: str) -> tuple[str | None, str | None]:
             return None
         return value
 
-    phone_number = _field(r"^\s*Phone(?:\s+number)?")
-    id_number = _field(r"^\s*ID(?:\s+(?:number|no\.?))?")
+    phone_number = _field(r"^[ \t]*Phone(?:[ \t]+number)?")
+    id_number = _field(r"^[ \t]*ID(?:[ \t]+(?:number|no\.?))?")
     return phone_number, id_number
 
 
