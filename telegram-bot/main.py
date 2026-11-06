@@ -2769,15 +2769,30 @@ def mg_delete_all_phone_id_report_entries(chat_id: str) -> None:
         logging.warning("MongoDB phone_id_reports delete-all error: %s", e)
 
 
+def _phone_id_report_clear_state(bot_data: dict) -> dict:
+    """Persistent deletion markers prevent stale MongoDB rows reappearing after an outage."""
+    return bot_data.setdefault("phone_id_report_clear_state", {
+        "cleared_dates": set(),
+        "cleared_chat_dates": set(),
+        "active_chats_by_date": {},
+    })
+
+
 def _get_phone_id_report_entries(bot_data: dict, chat_id: str, date_key: str) -> list:
-    """Read MongoDB first and use PicklePersistence as the fallback."""
+    """Read MongoDB first, while honoring durable clears and Pickle fallback."""
+    chat_id, date_key = str(chat_id), str(date_key)
+    state = _phone_id_report_clear_state(bot_data)
+    if (chat_id, date_key) in state["cleared_chat_dates"]:
+        return []
+    if date_key in state["cleared_dates"] and chat_id not in state["active_chats_by_date"].get(date_key, set()):
+        return []
     entries = mg_load_phone_id_report_entries(chat_id, date_key)
     if entries:
         return [dict(entry) for entry in entries]
     cached = (
         bot_data.get("phone_id_reports", {})
-        .get(str(chat_id), {})
-        .get(str(date_key), [])
+        .get(chat_id, {})
+        .get(date_key, [])
     )
     return [dict(entry) for entry in cached]
 
@@ -2785,9 +2800,12 @@ def _get_phone_id_report_entries(bot_data: dict, chat_id: str, date_key: str) ->
 def _save_phone_id_report_entries(
     bot_data: dict, chat_id: str, date_key: str, entries: list
 ) -> None:
-    chat_id = str(chat_id)
-    date_key = str(date_key)
+    chat_id, date_key = str(chat_id), str(date_key)
     stored = [dict(entry) for entry in entries]
+    state = _phone_id_report_clear_state(bot_data)
+    state["cleared_chat_dates"].discard((chat_id, date_key))
+    if date_key in state["cleared_dates"]:
+        state["active_chats_by_date"].setdefault(date_key, set()).add(chat_id)
     bot_data.setdefault("phone_id_reports", {}).setdefault(chat_id, {})[date_key] = stored
     mg_save_phone_id_report_entries(chat_id, date_key, stored)
 
@@ -2795,8 +2813,10 @@ def _save_phone_id_report_entries(
 def _delete_phone_id_report_entries(
     bot_data: dict, chat_id: str, date_key: str
 ) -> None:
-    chat_id = str(chat_id)
-    date_key = str(date_key)
+    chat_id, date_key = str(chat_id), str(date_key)
+    state = _phone_id_report_clear_state(bot_data)
+    state["cleared_chat_dates"].add((chat_id, date_key))
+    state["active_chats_by_date"].get(date_key, set()).discard(chat_id)
     mg_delete_phone_id_report_entries(chat_id, date_key)
     by_chat = bot_data.get("phone_id_reports", {}).get(chat_id, {})
     by_chat.pop(date_key, None)
@@ -2807,18 +2827,22 @@ def _delete_phone_id_report_entries(
 def _delete_phone_id_reports_for_date(
     bot_data: dict, date_key: str, db=None
 ) -> int:
-    """Clear one reporting day for every group from MongoDB and PicklePersistence."""
+    """Clear one reporting day globally, with durable markers if MongoDB is offline."""
+    date_key = str(date_key)
+    state = _phone_id_report_clear_state(bot_data)
+    state["cleared_dates"].add(date_key)
+    state["active_chats_by_date"].pop(date_key, None)
     removed = 0
     db = db if db is not None else get_mongo_db()
     if db is not None:
         try:
-            result = db["phone_id_reports"].delete_many({"date_key": str(date_key)})
+            result = db["phone_id_reports"].delete_many({"date_key": date_key})
             removed = result.deleted_count
         except Exception as e:
             logging.warning("MongoDB phone_id_reports daily clear error: %s", e)
     for chat_id, days in list(bot_data.get("phone_id_reports", {}).items()):
-        if str(date_key) in days:
-            del days[str(date_key)]
+        if date_key in days:
+            del days[date_key]
             if not days:
                 bot_data["phone_id_reports"].pop(chat_id, None)
     return removed
