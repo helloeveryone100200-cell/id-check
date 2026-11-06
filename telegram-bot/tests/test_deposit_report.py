@@ -113,6 +113,74 @@ class DepositReportStorageTests(unittest.TestCase):
         self.assertNotIn("-1001", data.get("phone_id_reports", {}))
 
 
+    def test_mongo_entries_are_primary_when_available(self):
+        mongo_entry = {
+            "source_message_id": 1,
+            "phone_number": "0999000000",
+            "id_number": "0001",
+        }
+        with patch.object(
+            bot, "mg_load_phone_id_report_entries", return_value=[mongo_entry]
+        ):
+            data = {
+                "phone_id_reports": {
+                    "-1001": {
+                        "2026-11-07": [
+                            {"source_message_id": 2, "phone_number": "old", "id_number": "old"}
+                        ]
+                    }
+                }
+            }
+            entries = bot._get_phone_id_report_entries(data, "-1001", "2026-11-07")
+        self.assertEqual(entries, [mongo_entry])
+
+    def test_pickle_is_used_when_mongo_has_no_records(self):
+        data = {
+            "phone_id_reports": {
+                "-1001": {
+                    "2026-11-07": [
+                        {"source_message_id": 2, "phone_number": "0900000000", "id_number": "0002"}
+                    ]
+                }
+            }
+        }
+        with patch.object(bot, "mg_load_phone_id_report_entries", return_value=[]):
+            entries = bot._get_phone_id_report_entries(data, "-1001", "2026-11-07")
+        self.assertEqual(entries[0]["phone_number"], "0900000000")
+
+    def test_delete_for_date_preserves_other_reporting_days(self):
+        class Collection:
+            def delete_many(self, query):
+                self.query = query
+                return SimpleNamespace(deleted_count=1)
+
+        collection = Collection()
+
+        class Database:
+            def __getitem__(self, name):
+                self.name = name
+                return collection
+
+        data = {
+            "phone_id_reports": {
+                "-1001": {
+                    "2026-11-06": [{"source_message_id": 1}],
+                    "2026-11-07": [{"source_message_id": 2}],
+                },
+                "-1002": {
+                    "2026-11-06": [{"source_message_id": 3}],
+                },
+            }
+        }
+        removed = bot._delete_phone_id_reports_for_date(
+            data, "2026-11-06", db=Database()
+        )
+        self.assertEqual(removed, 1)
+        self.assertNotIn("2026-11-06", data["phone_id_reports"]["-1001"])
+        self.assertIn("2026-11-07", data["phone_id_reports"]["-1001"])
+        self.assertNotIn("-1002", data["phone_id_reports"])
+
+
 class DepositReportMessageFlowTests(unittest.IsolatedAsyncioTestCase):
     async def _process(self, text=None, caption=None, message_id=91):
         message = SimpleNamespace(
