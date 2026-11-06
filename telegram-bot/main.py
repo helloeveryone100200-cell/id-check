@@ -2928,7 +2928,7 @@ MAIN_REPLY_KEYBOARD_VERSION = "group-schedule-monthly-admin-v5"
 def _main_reply_keyboard(
     bot_data: dict,
     include_schedule: bool = False,
-    include_monthly_admin: bool = False,
+    include_admin_pm_controls: bool = False,
 ) -> ReplyKeyboardMarkup:
     """Build group/user controls and show global admin actions only in Admin PM."""
     rows = [
@@ -2941,7 +2941,7 @@ def _main_reply_keyboard(
             _schedule_keyboard_button(bot_data, "reset_plus_button", style="danger"),
         ],
     ]
-    if include_monthly_admin:
+    if include_admin_pm_controls:
         rows.append([
             _schedule_keyboard_button(bot_data, "clear_all_button", style="success"),
             _schedule_keyboard_button(bot_data, "reset_plus_all_button", style="success"),
@@ -2999,7 +2999,7 @@ async def ensure_reply_keyboard(update: Update, context: CallbackContext) -> Non
     bot_data = context.application.bot_data
     include_schedule = update.effective_chat.type in {"group", "supergroup"}
     user = update.effective_user
-    include_monthly_admin = (
+    include_admin_pm_controls = (
         update.effective_chat.type == "private"
         and user is not None
         and user.id in ADMIN_IDS
@@ -3009,7 +3009,7 @@ async def ensure_reply_keyboard(update: Update, context: CallbackContext) -> Non
         reply_markup=_main_reply_keyboard(
             bot_data,
             include_schedule=include_schedule,
-            include_monthly_admin=include_monthly_admin,
+            include_admin_pm_controls=include_admin_pm_controls,
         ),
     )
 
@@ -3023,7 +3023,7 @@ async def main_menu_command(
     bot_data = context.application.bot_data
     include_schedule = update.effective_chat.type in {"group", "supergroup"}
     user = update.effective_user
-    include_monthly_admin = (
+    include_admin_pm_controls = (
         update.effective_chat.type == "private"
         and user is not None
         and user.id in ADMIN_IDS
@@ -3031,7 +3031,7 @@ async def main_menu_command(
     reply_markup = _main_reply_keyboard(
         bot_data,
         include_schedule=include_schedule,
-        include_monthly_admin=include_monthly_admin,
+        include_admin_pm_controls=include_admin_pm_controls,
     )
     if show_welcome:
         user_name = update.effective_user.full_name if update.effective_user else "User"
