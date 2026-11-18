@@ -464,5 +464,53 @@ class DailyAutoClearScheduleTests(unittest.TestCase):
         self.assertIn("name='monthly_total_auto_clear_daily'", source)
 
 
+
+class GreenAlertSubmissionMatcherTests(unittest.TestCase):
+    def test_supported_keywords_match_without_case_sensitivity(self):
+        phrases = [
+            "green",
+            "SCAM",
+            "same bank",
+            "SAME BANK & KILLLLLLLLLLL",
+            "same bank & killllllllllllll",
+            "telegram direct kill",
+            "TELEGRAM DIRECT KILL",
+            "telegram direct&#x20;",
+            "telegram&#x20;direct",
+            "tg direct",
+            "TG DIRECT",
+            "direct",
+            "DIRECT",
+            "same id & kill",
+            "SAME ID & KILL",
+            "same id kill",
+            "SAME ID KILL",
+            "same id",
+            "SAME ID",
+        ]
+        for phrase in phrases:
+            with self.subTest(phrase=phrase):
+                submission = f"{phrase}\nPhone number - 09123456789"
+                self.assertTrue(bot._is_green_data_submission(submission))
+
+    def test_supported_keyword_still_requires_eight_consecutive_digits(self):
+        for phrase in ("same bank", "telegram direct", "tg direct", "direct", "same id", "green", "scam"):
+            with self.subTest(phrase=phrase):
+                self.assertFalse(bot._is_green_data_submission(phrase))
+
+    def test_unlisted_phrase_does_not_count_even_with_phone_number(self):
+        self.assertFalse(
+            bot._is_green_data_submission(
+                "same account & kill\nPhone number - 09123456789"
+            )
+        )
+
+    def test_direct_is_matched_as_a_word_not_inside_another_word(self):
+        self.assertFalse(
+            bot._is_green_data_submission(
+                "indirect payment\nPhone number - 09123456789"
+            )
+        )
+
 if __name__ == "__main__":
     unittest.main()
