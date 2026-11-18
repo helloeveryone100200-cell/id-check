@@ -6080,34 +6080,57 @@ async def handle_daqiang_reply(update: Update, context: CallbackContext) -> None
     )
 
 
+GREEN_ALERT_KEYWORD_PATTERN = re.compile(
+    r"green|scam|"
+    r"\bsame\s+bank\b|"
+    r"\btelegram\s+direct\b|"
+    r"\btg\s+direct\b|"
+    r"\bdirect\b|"
+    r"\bsame\s+id\b",
+    re.IGNORECASE,
+)
+
+
 def _is_green_data_submission(text: str) -> bool:
-    """Return True only when 'text' looks like a member data submission containing Green or Scam.
+    """Return True when a group submission contains a supported report keyword and an ID/phone-like number.
 
-    Rules (all must pass):
-      1. Contains 'green' OR 'scam' anywhere in the text (case-insensitive).
-         Matches any variation: "Green account", "green level 2", "3 scam",
-         "scam task3", "GREEN", "SCAM", etc.
-      2. Contains at least one numeric sequence of 8 or more consecutive digits
-         — every real submission has a phone number or account ID; casual chat
-         mentioning green/scam almost never does.
+    Supported keywords are matched case-insensitively:
+      - green, scam
+      - same bank (also covers forms such as "same bank & kill...")
+      - telegram direct, tg direct, or the standalone word direct
+      - same id (also covers forms such as "same id & kill" and "same id kill")
 
-    This prevents ordinary conversation such as
-        "green light ကောင်းသည်"  or  "scam လောင်းတယ်"
-    from triggering the counter.
+    HTML-encoded spaces such as "telegram&#x20;direct" are normalized before
+    matching. A submission must also contain at least one sequence of 8 or
+    more consecutive digits, preserving the existing data-submission guard.
     """
-    if not re.search(r'green|scam', text, re.IGNORECASE):
+    if not text:
         return False
-    # At least one run of 8+ digits anywhere in the message
-    if not re.search(r'\d{8,}', text):
+
+    # Telegram/text exports may expose an HTML-encoded space instead of a
+    # normal whitespace character. Normalize the common space entities.
+    normalized_text = re.sub(
+        r"(?:&#x0*20;|&#0*32;|&nbsp;)",
+        " ",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    if not GREEN_ALERT_KEYWORD_PATTERN.search(normalized_text):
         return False
+
+    # At least one run of 8+ digits anywhere in the message.
+    if not re.search(r"\d{8,}", normalized_text):
+        return False
+
     return True
 
 
 async def handle_green_report(update: Update, context: CallbackContext) -> None:
-    """Count data-submission messages containing 'Green' per chat per day and alert after threshold.
+    """Count supported report-keyword submissions per chat per day and alert after threshold.
 
     - Works with text-only messages AND photo/media with caption.
-    - Only fires for data submissions (must contain 8+ digit number alongside 'green').
+    - Only fires for data submissions (a supported keyword plus an 8+ digit number).
     - Counts in-memory only (resets on bot restart or the next calendar day).
     - Starts alerting from (GREEN_ALERT_THRESHOLD + 1)-th submission onward.
     - Custom message stored in MongoDB via /setmsg → 'green_alert'.
