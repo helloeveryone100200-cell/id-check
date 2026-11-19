@@ -512,5 +512,35 @@ class GreenAlertSubmissionMatcherTests(unittest.TestCase):
             )
         )
 
+
+class MainMenuAndForbiddenErrorTests(unittest.TestCase):
+    def test_main_menu_handler_ignores_update_without_normal_message(self):
+        update = SimpleNamespace(message=None)
+        context = SimpleNamespace()
+        # Should return without trying to read update.message.text or bot_data.
+        asyncio.run(bot.main_menu_text_handler(update, context))
+
+    def test_main_menu_handler_ignores_message_without_text(self):
+        update = SimpleNamespace(message=SimpleNamespace(text=None))
+        context = SimpleNamespace()
+        asyncio.run(bot.main_menu_text_handler(update, context))
+
+    def test_forbidden_error_is_classified_as_access_issue_not_generic_crash(self):
+        from telegram.error import Forbidden
+
+        context = SimpleNamespace(
+            error=Forbidden("Forbidden: bot was kicked from the group chat"),
+            application=SimpleNamespace(bot=SimpleNamespace(send_message=None)),
+        )
+        with (
+            patch.object(bot, "ADMIN_IDS", []),
+            patch.object(bot.logging, "error") as error_log,
+            patch.object(bot.logging, "warning") as warning_log,
+        ):
+            asyncio.run(bot.error_handler(None, context))
+
+        error_log.assert_not_called()
+        warning_log.assert_called_once()
+
 if __name__ == "__main__":
     unittest.main()
