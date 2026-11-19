@@ -3222,9 +3222,8 @@ async def number_words_start(update: Update, context: CallbackContext) -> int:
 
 async def main_menu_text_handler(update: Update, context: CallbackContext) -> None:
     """Route current and legacy customizable reply-keyboard labels to their original actions."""
-    # MessageHandler may also receive edited-message updates. This router is
-    # only for actual incoming messages because the delegated commands expect
-    # update.message to exist.
+    # Defensive guard: delegated button commands require a normal incoming
+    # message. Ignore updates that do not carry update.message.
     message = getattr(update, "message", None)
     if message is None or not message.text:
         return
@@ -6788,15 +6787,15 @@ async def error_handler(update: object, context: CallbackContext) -> None:
         chat = update.effective_chat if isinstance(update, Update) else None
         user = update.effective_user if isinstance(update, Update) else None
         update_info = (
-            f"\\n👤 User: {user.full_name if user else 'N/A'} "
+            f"\n👤 User: {user.full_name if user else 'N/A'} "
             f"(ID: {user.id if user else 'N/A'})"
-            f"\\n💬 Chat: {chat.title if chat and chat.title else 'N/A'} "
+            f"\n💬 Chat: {chat.title if chat and chat.title else 'N/A'} "
             f"(ID: {chat.id if chat else 'N/A'})"
         )
         access_msg = (
             "⚠️ BOT ACCESS RESTRICTED"
-            f"{update_info}\\n\\n"
-            f"Reason: {str(err)[:400]}\\n\\n"
+            f"{update_info}\n\n"
+            f"Reason: {str(err)[:400]}\n\n"
             "The bot may have been removed/blocked or may no longer have "
             "the required permission. Re-add the bot to the group and "
             "restore the required permissions. No group data or schedules "
