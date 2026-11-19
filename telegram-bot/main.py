@@ -3222,6 +3222,13 @@ async def number_words_start(update: Update, context: CallbackContext) -> int:
 
 async def main_menu_text_handler(update: Update, context: CallbackContext) -> None:
     """Route current and legacy customizable reply-keyboard labels to their original actions."""
+    # MessageHandler may also receive edited-message updates. This router is
+    # only for actual incoming messages because the delegated commands expect
+    # update.message to exist.
+    message = getattr(update, "message", None)
+    if message is None or not message.text:
+        return
+
     handlers = {
         "showdata_button": show_data,
         "deposit_report_button": deposit_report,
@@ -3233,7 +3240,7 @@ async def main_menu_text_handler(update: Update, context: CallbackContext) -> No
         "clear_all_button": admin_clearall_command,
         "reset_plus_all_button": admin_resetplusall_command,
     }
-    text = _normalize_schedule_keyboard_text(update.message.text or "")
+    text = _normalize_schedule_keyboard_text(message.text)
     bot_data = context.application.bot_data
     for key, handler in handlers.items():
         if text in _schedule_keyboard_labels(bot_data, key):
@@ -6771,9 +6778,49 @@ async def post_init(application: Application) -> None:
 
 async def error_handler(update: object, context: CallbackContext) -> None:
     import traceback
-    from telegram.error import Conflict, NetworkError, RetryAfter, TimedOut
+    from telegram.error import Conflict, Forbidden, NetworkError, RetryAfter, TimedOut
 
     err = context.error
+
+    # A bot removed from a group (or lacking permission) can no longer reply
+    # there. Report this as an access issue, not as an application traceback.
+    if isinstance(err, Forbidden):
+        chat = update.effective_chat if isinstance(update, Update) else None
+        user = update.effective_user if isinstance(update, Update) else None
+        update_info = (
+            f"\\n👤 User: {user.full_name if user else 'N/A'} "
+            f"(ID: {user.id if user else 'N/A'})"
+            f"\\n💬 Chat: {chat.title if chat and chat.title else 'N/A'} "
+            f"(ID: {chat.id if chat else 'N/A'})"
+        )
+        access_msg = (
+            "⚠️ BOT ACCESS RESTRICTED"
+            f"{update_info}\\n\\n"
+            f"Reason: {str(err)[:400]}\\n\\n"
+            "The bot may have been removed/blocked or may no longer have "
+            "the required permission. Re-add the bot to the group and "
+            "restore the required permissions. No group data or schedules "
+            "were deleted automatically."
+        )
+        logging.warning(
+            "Telegram access denied (Forbidden). user_id=%s chat_id=%s error=%s",
+            user.id if user else None,
+            chat.id if chat else None,
+            err,
+        )
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.application.bot.send_message(
+                    chat_id=admin_id,
+                    text=access_msg,
+                )
+            except Exception as notify_error:
+                logging.warning(
+                    "Could not send access-restricted notice to admin %s: %s",
+                    admin_id,
+                    notify_error,
+                )
+        return
 
     # AIORateLimiter retries transient Flood Control responses. If all bounded
     # retries are exhausted, log the final cooldown without sending another
@@ -6968,7 +7015,7 @@ def main():
             )
 
     application.add_handler(MessageHandler(
-        _MainMenuButtonFilter(),
+        _MainMenuButtonFilter() & filters.UpdateType.MESSAGE,
         main_menu_text_handler,
     ))
     # Group /start remains unchanged; private /start is routed through the
