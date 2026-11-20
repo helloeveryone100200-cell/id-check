@@ -363,6 +363,72 @@ class PhoneIdDepositReportTests(unittest.TestCase):
         self.assertEqual(rows[0]["phone_number"], "0922222222")
         self.assertEqual(rows[0]["id_number"], "222")
 
+    def test_minus_reply_removes_only_matching_deposit_report_pair(self):
+        chat_id = "-100555"
+        date_key = "2026-11-06"
+        entry = "6/11    清风    client"
+        matched_row = {
+            "source_message_id": 101,
+            "phone_number": "0915985240",
+            "id_number": "8658096622",
+        }
+        unrelated_row = {
+            "source_message_id": 102,
+            "phone_number": "0911769600",
+            "id_number": "7146512061",
+        }
+        bot_data = {
+            "group_data": {chat_id: {date_key: [entry]}},
+            "phone_id_reports": {
+                chat_id: {date_key: [matched_row, unrelated_row]}
+            },
+        }
+
+        # The mapping intentionally represents an older production record
+        # without source_message_id. The Telegram reply target supplies it.
+        original_bot_reply = SimpleNamespace(
+            message_id=900,
+            reply_to_message=SimpleNamespace(message_id=101),
+        )
+        minus_message = SimpleNamespace(
+            chat=SimpleNamespace(id=int(chat_id)),
+            reply_to_message=original_bot_reply,
+        )
+        update = SimpleNamespace(message=minus_message)
+        context = SimpleNamespace(
+            application=SimpleNamespace(bot_data=bot_data, persistence=None)
+        )
+        old_mapping = {
+            (int(chat_id), 900): {
+                "entry": entry,
+                "date_key": date_key,
+                "chat_id": chat_id,
+                "monthly_record_id": None,
+            }
+        }
+
+        async def ignore_custom_reply(*args, **kwargs):
+            return None
+
+        with (
+            patch.object(bot, "get_mongo_db", return_value=None),
+            patch.object(bot, "mg_load_group_data", return_value=[entry]),
+            patch.object(bot, "mg_save_group_data") as save_group_data,
+            patch.object(bot, "save_data_msg_map"),
+            patch.object(bot, "data_msg_map", old_mapping),
+            patch.object(bot, "plus_counted_msgs", {}),
+            patch.object(bot, "_reply_custom", new=ignore_custom_reply),
+        ):
+            asyncio.run(bot.handle_minus_reply(update, context))
+
+        self.assertEqual(
+            bot_data["phone_id_reports"][chat_id][date_key],
+            [unrelated_row],
+        )
+        self.assertEqual(bot_data["group_data"][chat_id][date_key], [])
+        save_group_data.assert_called_once_with(chat_id, date_key, [])
+        self.assertNotIn((int(chat_id), 900), old_mapping)
+
     def test_clear_data_removes_today_phone_id_records_and_keeps_other_days(self):
         chat_id = "-100555"
         today = "2026-11-06"

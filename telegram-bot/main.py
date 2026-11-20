@@ -3796,6 +3796,38 @@ def _upsert_phone_id_report_entry(
     _save_phone_id_report_entries(bot_data, chat_id, date_key, entries)
 
 
+def _remove_phone_id_report_entry(
+    bot_data: dict,
+    chat_id: str,
+    date_key: str,
+    source_message_id: int | str | None,
+) -> bool:
+    """Remove only the Deposit Report row created from one source Telegram message."""
+    if source_message_id is None:
+        return False
+    try:
+        target_message_id = int(source_message_id)
+    except (TypeError, ValueError):
+        return False
+
+    entries = _get_phone_id_report_entries(bot_data, str(chat_id), str(date_key))
+    remaining = []
+    removed = False
+    for entry in entries:
+        try:
+            entry_message_id = int(entry.get("source_message_id"))
+        except (TypeError, ValueError):
+            entry_message_id = None
+        if entry_message_id == target_message_id:
+            removed = True
+        else:
+            remaining.append(entry)
+
+    if removed:
+        _save_phone_id_report_entries(bot_data, str(chat_id), str(date_key), remaining)
+    return removed
+
+
 async def deposit_report(update: Update, context: CallbackContext) -> None:
     """Show today's Phone Number / ID pairs to any member of this group."""
     message = _update_message(update)
@@ -3921,6 +3953,7 @@ async def extract_and_save_data(update: Update, context: CallbackContext) -> Non
         "entry": stored_entry,
         "date_key": today_key,
         "chat_id": chat_id,
+        "source_message_id": update.message.message_id,
         "monthly_record_id": monthly_record_id,
     }
     save_data_msg_map()
@@ -5989,6 +6022,21 @@ async def handle_minus_reply(update: Update, context: CallbackContext) -> None:
         entry = record["entry"]
         date_key = record["date_key"]
         cid_str = record["chat_id"]
+
+        # Remove the corresponding Phone / ID pair from the separate Deposit Report.
+        # Older map records predate source_message_id, so recover it from the bot
+        # reply's Telegram reply_to_message field when Telegram provides it.
+        source_message_id = record.get("source_message_id")
+        if source_message_id is None:
+            source_message = getattr(original, "reply_to_message", None)
+            source_message_id = getattr(source_message, "message_id", None)
+        if source_message_id is not None:
+            _remove_phone_id_report_entry(
+                context.application.bot_data,
+                cid_str,
+                date_key,
+                source_message_id,
+            )
 
         # Remove from MongoDB
         entries = mg_load_group_data(cid_str, date_key)
